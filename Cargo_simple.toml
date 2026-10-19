@@ -1,0 +1,19 @@
+[package]
+name = "securepass"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "0.8", features = ["v4", "serde"] }
+aes = "0.8"
+cipher = "0.4"
+rand = "0.8"
+sha2 = "0.9"
+thiserror = "1.0"
+serde_json = "1.0"
+rusqlite = { version = "0.28", features = ["bundled"] }
+pbkdf2 = "0.11"
+hmac = "0.12"

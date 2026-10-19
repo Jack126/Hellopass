@@ -166,7 +166,7 @@ impl MasterPasswordManager {
     }
 
     /// 验证密码强度
-    fn validate_password_strength(&self, password: &str) -> bool {
+    pub fn validate_password_strength_inner(&self, password: &str) -> bool {
         // 最小长度 12
         if password.len() < 12 {
             return false;

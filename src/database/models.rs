@@ -536,13 +536,13 @@ impl PasswordStrength {
 
         // 如果分数很高但没有反馈，添加正面反馈
         if feedback.is_empty() && score >= 70 {
-            feedback.push("这是一个强密码".to_string());
+            feedback.push("这是一个强密码");
         }
 
         Self {
             score,
             level: level.to_string(),
-            feedback,
+            feedback: feedback.iter().map(|s| s.to_string()).collect(),
             common_password,
         }
     }

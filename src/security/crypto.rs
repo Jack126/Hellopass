@@ -1,4 +1,4 @@
-use aes::cipher::{KeyIvInit, StreamCipher, SyncStreamCipher};
+use aes::cipher::{KeyIvInit, StreamCipher};
 use aes::Aes256Ctr;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;

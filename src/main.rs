@@ -41,7 +41,7 @@ fn main() {
             println!("✅ 加密引擎初始化成功");
             
             // 测试加密/解密
-            let test_data = b"Hello, World! 这是一个测试密码。";
+            let test_data = b"Hello, World! This is a test password.";
             match engine.encrypt(test_data) {
                 Ok(encrypted) => {
                     println!("✅ 数据加密成功 (长度: {})", encrypted.len());
@@ -79,7 +79,7 @@ fn main() {
             // 测试密码强度验证
             let weak_passwords = ["123", "password", "123456"];
             for password in weak_passwords {
-                if master_password_manager.validate_password_strength(password) {
+                if master_password_manager.validate_password_strength_inner(password) {
                     println!("❌ 密码 '{}' 应该被拒绝但通过了", password);
                 } else {
                     println!("✅ 密码 '{}' 正确被拒绝", password);
@@ -87,7 +87,7 @@ fn main() {
             }
             
             let strong_password = "SecurePass123!@#Test";
-            if master_password_manager.validate_password_strength(strong_password) {
+            if master_password_manager.validate_password_strength_inner(strong_password) {
                 println!("✅ 强密码 '{}' 正确通过", strong_password);
             } else {
                 println!("❌ 强密码 '{}' 被错误拒绝", strong_password);
