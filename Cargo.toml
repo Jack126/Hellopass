@@ -17,7 +17,24 @@ serde_json = "1.0"
 rusqlite = { version = "0.28", features = ["bundled"] }
 pbkdf2 = "0.11"
 hmac = "0.12"
+# tauri = { version = "1.5", features = ["notification", "dialog", "fs", "path", "window-all", "tray-icon"] } # Disabled for compatibility
 
 [[bin]]
 name = "securepass_simple"
 path = "src/main_simple.rs"
+
+[[bin]]
+name = "securepass_fixed"
+path = "src/main_fixed.rs"
+
+[[bin]]
+name = "securepass_tauri"
+path = "src/main_tauri.rs"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
