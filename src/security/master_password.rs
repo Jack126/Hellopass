@@ -1,5 +1,5 @@
 use crate::security::crypto::SecureCryptoEngine;
-use crate::security::key_management::KeyManager;
+use crate::security::key_management::{KeyManager, KeyManagerConfig};
 use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::fs::File;
@@ -69,8 +69,12 @@ impl MasterPasswordManager {
         let config = self.load_config()?;
         
         // 尝试创建密钥管理器
-        let key_manager = KeyManager::from_existing(password, config)
-            .map_err(|_| MasterPasswordError::IncorrectPassword)?;
+        let key_manager = KeyManager::from_existing(password, KeyManagerConfig {
+            algorithm: "PBKDF2-HMAC-SHA256".to_string(),
+            iterations: 100_000,
+            salt_length: 32,
+        })
+        .map_err(|_| MasterPasswordError::IncorrectPassword)?;
         
         self.key_manager = Some(key_manager);
         Ok(())
@@ -89,13 +93,13 @@ impl MasterPasswordManager {
         let crypto_engine = self.get_crypto_engine()?;
         
         // 加密数据
-        let encrypted_data = crypto_engine.encrypt_gcm(data)
+        let encrypted_data = crypto_engine.encrypt(data)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
         
         // 创建导出包
         let export_package = ExportPackage {
             version: "1.0".to_string(),
-            algorithm: "AES-256-GCM".to_string(),
+            algorithm: "AES-256-CTR".to_string(),
             salt: crypto_engine.get_salt().to_vec(),
             encrypted_data: base64::encode(encrypted_data),
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -224,9 +228,6 @@ impl MasterPasswordManager {
 #[derive(Serialize, Deserialize)]
 struct MasterPasswordConfig {
     created_at: String,
-    algorithm: String,
-    iterations: u32,
-    salt_length: usize,
 }
 
 /// 导出包结构

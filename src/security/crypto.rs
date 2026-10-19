@@ -1,5 +1,4 @@
 use aes::cipher::{KeyIvInit, StreamCipher, SyncStreamCipher};
-use aes::Aes256Gcm;
 use aes::Aes256Ctr;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
@@ -69,25 +68,20 @@ impl SecureCryptoEngine {
         &self.salt
     }
 
-    /// AES-256-GCM 加密
-    pub fn encrypt_gcm(&self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    /// AES-256-CTR 加密
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         // 生成随机IV
-        let mut iv = [0u8; 12];
+        let mut iv = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut iv);
 
         // 创建加密器
-        let cipher = Aes256Gcm::new_from_slice(&self.master_key)
-            .map_err(|_| CryptoError::EncryptionFailed)?;
-
-        // 准备关联数据（应用标识符）
-        let aad = &self.app_identifier;
-
+        let cipher = Aes256Ctr::new_from_slice(&self.master_key, &iv);
+        
         // 加密数据
         let mut ciphertext = plaintext.to_vec();
-        cipher.encrypt_iv(aad, &mut iv, &mut ciphertext)
-            .map_err(|_| CryptoError::EncryptionFailed)?;
+        cipher.apply_keystream(&mut ciphertext);
 
-        // 组合 IV + 密文 + 认证标签
+        // 组合 IV + 密文
         let mut result = Vec::new();
         result.extend_from_slice(&iv);
         result.extend_from_slice(&ciphertext);
@@ -95,28 +89,23 @@ impl SecureCryptoEngine {
         Ok(result)
     }
 
-    /// AES-256-GCM 解密
-    pub fn decrypt_gcm(&self, encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        if encrypted_data.len() < 12 + 16 { // IV (12) + Tag (16)
+    /// AES-256-CTR 解密
+    pub fn decrypt(&self, encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        if encrypted_data.len() < 16 {
             return Err(CryptoError::InvalidCiphertext);
         }
 
         // 分割 IV 和密文
-        let (iv_bytes, ciphertext_with_tag) = encrypted_data.split_at(12);
+        let (iv_bytes, ciphertext) = encrypted_data.split_at(16);
         
         // 创建解密器
-        let cipher = Aes256Gcm::new_from_slice(&self.master_key)
-            .map_err(|_| CryptoError::DecryptionFailed)?;
-
-        // 准备关联数据
-        let aad = &self.app_identifier;
-
+        let cipher = Aes256Ctr::new_from_slice(&self.master_key, iv_bytes);
+        
         // 解密数据
-        let mut ciphertext = ciphertext_with_tag.to_vec();
-        cipher.decrypt_iv(aad, iv_bytes, &mut ciphertext)
-            .map_err(|_| CryptoError::DecryptionFailed)?;
+        let mut plaintext = ciphertext.to_vec();
+        cipher.apply_keystream(&mut plaintext);
 
-        Ok(ciphertext)
+        Ok(plaintext)
     }
 
     /// AES-256-CTR 流加密（用于大文件）

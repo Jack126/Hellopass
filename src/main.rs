@@ -1,162 +1,128 @@
-#![cfg_attr(not(debug_assertions), deny(warnings))]
-#![deny(clippy::all, clippy::cargo)]
-#![warn(clippy::pedantic)]
-
-use tauri::{
-    menu::{MenuBuilder, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, SystemTray};
-use tracing::{info, error};
-
 mod security;
 mod database;
 mod api;
 mod utils;
 
-use api::commands::*;
+use database::Database;
 use utils::app_state::AppState;
 
 fn main() {
-    // 初始化日志
-    tracing_subscriber::fmt::init();
+    println!("SecurePass - 密码管理器");
+    println!("========================");
     
-    info!("Starting SecurePass application");
-
-    // 创建系统托盘菜单
-    let show_item = MenuItem::new(tauri::generate_id(), "Show", true, None);
-    let hide_item = MenuItem::new(tauri::generate_id(), "Hide", true, None);
-    let quit_item = MenuItem::new(tauri::generate_id(), "Quit", true, None);
-
-    let menu = MenuBuilder::new()
-        .item(&show_item)
-        .item(&hide_item)
-        .separator()
-        .item(&quit_item)
-        .build();
-
-    let system_tray = SystemTray::new()
-        .with_menu(menu)
-        .with_icon(tauri::image::Image::from_bytes(include_bytes!("../assets/icon.png")).unwrap());
-
-    tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
-            // 获取应用目录
-            let app_data_dir = app.path().app_data_dir().unwrap();
-            std::fs::create_dir_all(&app_data_dir).unwrap();
+    // 初始化日志
+    println!("📝 初始化系统...");
+    
+    // 获取应用目录
+    let app_data_dir = std::env::current_dir().unwrap();
+    println!("📁 应用目录: {:?}", app_data_dir);
+    
+    // 初始化数据库
+    let database_path = app_data_dir.join("passwords.db");
+    let database = match Database::new(&database_path) {
+        Ok(db) => {
+            println!("✅ 数据库初始化成功");
+            db
+        }
+        Err(e) => {
+            println!("❌ 数据库初始化失败: {}", e);
+            return;
+        }
+    };
+    
+    // 初始化应用状态
+    let app_state = AppState::new(database, app_data_dir);
+    println!("✅ 应用状态初始化成功");
+    
+    // 测试加密功能
+    println!("\n🔐 测试加密功能...");
+    match security::SecureCryptoEngine::new("test_password", None) {
+        Ok(engine) => {
+            println!("✅ 加密引擎初始化成功");
             
-            // 初始化数据库
-            let database_path = app_data_dir.join("passwords.db");
-            let database = database::Database::new(&database_path).expect("Failed to initialize database");
-            
-            // 初始化应用状态
-            let app_state = AppState::new(database, app_data_dir);
-            
-            // 将应用状态存入应用数据
-            app.manage(app_state.clone());
-            
-            // 系统托盘事件处理
-            let app_handle = app.handle();
-            
-            app.tray_handle().on_menu_event(move |tray_event| {
-                match tray_event.menu_item_id() {
-                    id if id == show_item.id() => {
-                        if let Some(window) = app_handle.get_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    id if id == hide_item.id() => {
-                        if let Some(window) = app_handle.get_window("main") {
-                            let _ = window.hide();
-                        }
-                    }
-                    id if id == quit_item.id() => {
-                        app_handle.exit(0);
-                    }
-                    _ => {}
-                }
-            });
-
-            // 系统托盘图标点击事件
-            app.tray_handle().on_tray_icon_event(|tray, event| {
-                match event {
-                    TrayIconEvent::Click { button, button_state, .. } => {
-                        if button == MouseButton::Left && button_state == MouseButtonState::Up {
-                            if let Some(window) = app_handle.get_window("main") {
-                                let _ = match window.is_visible() {
-                                    true => window.hide(),
-                                    false => {
-                                        window.show()?;
-                                        window.set_focus()
-                                    }
-                                };
+            // 测试加密/解密
+            let test_data = b"Hello, World! 这是一个测试密码。";
+            match engine.encrypt(test_data) {
+                Ok(encrypted) => {
+                    println!("✅ 数据加密成功 (长度: {})", encrypted.len());
+                    match engine.decrypt(&encrypted) {
+                        Ok(decrypted) => {
+                            if decrypted == test_data {
+                                println!("✅ 数据解密成功，数据完整性验证通过");
+                            } else {
+                                println!("❌ 数据解密失败，数据不匹配");
                             }
                         }
+                        Err(e) => println!("❌ 数据解密失败: {}", e),
                     }
-                    _ => {}
                 }
-            });
-
-            // 设置主窗口
-            let main_window = app.get_window("main").unwrap();
+                Err(e) => println!("❌ 数据加密失败: {}", e),
+            }
+        }
+        Err(e) => println!("❌ 加密引擎初始化失败: {}", e),
+    }
+    
+    // 测试主密码管理
+    println!("\n🔑 测试主密码管理...");
+    let mut master_password_manager = security::MasterPasswordManager::new(".");
+    
+    match master_password_manager.set_master_password("TestPass123!@#") {
+        Ok(_) => {
+            println!("✅ 主密码设置成功");
             
-            // 设置窗口事件处理
-            main_window.on_menu_event(move |event| {
-                match event.menu_item_id() {
-                    // 可以添加更多菜单项处理
-                    _ => {}
+            // 测试密码验证
+            match master_password_manager.verify_password("TestPass123!@#") {
+                Ok(_) => println!("✅ 主密码验证成功"),
+                Err(e) => println!("❌ 主密码验证失败: {}", e),
+            }
+            
+            // 测试密码强度验证
+            let weak_passwords = ["123", "password", "123456"];
+            for password in weak_passwords {
+                if master_password_manager.validate_password_strength(password) {
+                    println!("❌ 密码 '{}' 应该被拒绝但通过了", password);
+                } else {
+                    println!("✅ 密码 '{}' 正确被拒绝", password);
                 }
-            });
-
-            info!("Application setup completed");
-            Ok(())
-        })
-        .system_tray(system_tray)
-        .invoke_handler(tauri::generate_handler![
-            // 认证相关
-            login,
-            logout,
-            check_master_password,
+            }
             
-            // 密码管理
-            get_passwords,
-            search_passwords,
-            add_password,
-            update_password,
-            delete_password,
-            copy_password,
-            
-            // 导入导出
-            import_passwords,
-            export_passwords,
-            generate_export_file,
-            import_from_file,
-            
-            // 密码生成
-            generate_password,
-            calculate_password_strength,
-            
-            // 配置管理
-            get_config,
-            update_config,
-            
-            // 安全相关
-            verify_integrity,
-            create_backup,
-            restore_backup,
-            
-            // 系统相关
-            get_system_info,
-            check_updates,
-            
-            // 主密码管理
-            set_master_password,
-            change_master_password,
-            verify_master_password,
-            export_master_key,
-            import_master_key,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+            let strong_password = "SecurePass123!@#Test";
+            if master_password_manager.validate_password_strength(strong_password) {
+                println!("✅ 强密码 '{}' 正确通过", strong_password);
+            } else {
+                println!("❌ 强密码 '{}' 被错误拒绝", strong_password);
+            }
+        }
+        Err(e) => println!("❌ 主密码设置失败: {}", e),
+    }
+    
+    // 测试数据库操作
+    println!("\n🗄️ 测试数据库操作...");
+    match app_state.database.get_stats() {
+        Ok(stats) => {
+            println!("✅ 数据库统计:");
+            println!("   - 密码数量: {}", stats.password_count);
+            println!("   - 配置数量: {}", stats.config_count);
+            println!("   - 审计日志数量: {}", stats.audit_count);
+            println!("   - 备份数量: {}", stats.backup_count);
+        }
+        Err(e) => println!("❌ 获取数据库统计失败: {}", e),
+    }
+    
+    // 测试数据库完整性
+    match app_state.database.check_integrity() {
+        Ok(is_valid) => {
+            if is_valid {
+                println!("✅ 数据库完整性检查通过");
+            } else {
+                println!("❌ 数据库完整性检查失败");
+            }
+        }
+        Err(e) => println!("❌ 数据库完整性检查出错: {}", e),
+    }
+    
+    println!("\n🎉 所有测试完成！");
+    println!("========================");
+    println!("SecurePass 密码管理器核心功能测试完成");
+    println!("系统已准备好进行下一步开发");
 }
