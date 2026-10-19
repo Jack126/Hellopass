@@ -1,1243 +1,155 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SecurePass - 密码管理器</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background-color: #f5f5f5;
-      color: #333;
-      line-height: 1.6;
-    }
-
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 20px;
-    }
-
-    /* 登录界面 */
-    .login-container {
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      padding: 40px;
-      max-width: 400px;
-      margin: 100px auto;
-    }
-
-    .login-header {
-      text-align: center;
-      margin-bottom: 30px;
-    }
-
-    .login-header h1 {
-      color: #2c3e50;
-      margin-bottom: 10px;
-      font-size: 24px;
-    }
-
-    .login-header p {
-      color: #666;
-      font-size: 14px;
-    }
-
-    .form-group {
-      margin-bottom: 20px;
-    }
-
-    .form-group label {
-      display: block;
-      margin-bottom: 5px;
-      font-weight: 500;
-    }
-
-    .form-group input {
-      width: 100%;
-      padding: 10px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      font-size: 16px;
-    }
-
-    .form-group input:focus {
-      outline: none;
-      border-color: #3498db;
-    }
-
-    .btn {
-      width: 100%;
-      padding: 12px;
-      border: none;
-      border-radius: 4px;
-      font-size: 16px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background-color 0.3s;
-    }
-
-    .btn-primary {
-      background: #3498db;
-      color: white;
-    }
-
-    .btn-primary:hover {
-      background: #2980b9;
-    }
-
-    .btn-primary:disabled {
-      background: #bdc3c7;
-      cursor: not-allowed;
-    }
-
-    .btn-secondary {
-      background: #95a5a6;
-      color: white;
-    }
-
-    .btn-secondary:hover {
-      background: #7f8c8d;
-    }
-
-    .btn-danger {
-      background: #e74c3c;
-      color: white;
-    }
-
-    .btn-danger:hover {
-      background: #c0392b;
-    }
-
-    .btn-success {
-      background: #27ae60;
-      color: white;
-    }
-
-    .btn-success:hover {
-      background: #229954;
-    }
-
-    .btn-small {
-      padding: 6px 12px;
-      font-size: 14px;
-    }
-
-    .btn-icon {
-      padding: 8px;
-      border-radius: 4px;
-      cursor: pointer;
-      border: none;
-      font-size: 14px;
-    }
-
-    /* 主应用界面 */
-    .main-app {
-      display: none;
-    }
-
-    .app-header {
-      background: white;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .logo h1 {
-      color: #2c3e50;
-      font-size: 20px;
-    }
-
-    .header-actions {
-      display: flex;
-      gap: 10px;
-    }
-
-    .search-bar {
-      background: white;
-      border-radius: 8px;
-      padding: 15px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .search-input {
-      flex: 1;
-      padding: 10px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      font-size: 16px;
-    }
-
-    .search-input:focus {
-      outline: none;
-      border-color: #3498db;
-    }
-
-    .password-list {
-      background: white;
-      border-radius: 8px;
-      padding: 20px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-
-    .password-item {
-      display: flex;
-      align-items: center;
-      padding: 15px;
-      border: 1px solid #eee;
-      border-radius: 4px;
-      margin-bottom: 10px;
-      transition: background-color 0.3s;
-    }
-
-    .password-item:hover {
-      background: #f8f9fa;
-    }
-
-    .password-item.selected {
-      background: #e3f2fd;
-      border-color: #3498db;
-    }
-
-    .site-icon {
-      width: 40px;
-      height: 40px;
-      border-radius: 4px;
-      margin-right: 15px;
-      background: #3498db;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: bold;
-      font-size: 16px;
-    }
-
-    .password-info {
-      flex: 1;
-    }
-
-    .site-name {
-      font-weight: 600;
-      font-size: 16px;
-      margin-bottom: 3px;
-    }
-
-    .site-url {
-      color: #666;
-      font-size: 14px;
-      margin-bottom: 3px;
-    }
-
-    .username {
-      color: #888;
-      font-size: 14px;
-    }
-
-    .password-actions {
-      display: flex;
-      gap: 5px;
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 60px 20px;
-      color: #666;
-    }
-
-    .empty-state i {
-      font-size: 48px;
-      color: #ddd;
-      margin-bottom: 20px;
-    }
-
-    .loading {
-      text-align: center;
-      padding: 40px;
-      color: #666;
-    }
-
-    /* 模态框 */
-    .modal {
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.5);
-      z-index: 1000;
-    }
-
-    .modal-content {
-      background: white;
-      border-radius: 8px;
-      padding: 30px;
-      max-width: 500px;
-      margin: 50px auto;
-      max-height: 80vh;
-      overflow-y: auto;
-    }
-
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-    }
-
-    .modal-header h3 {
-      margin: 0;
-      color: #2c3e50;
-    }
-
-    .close-btn {
-      background: none;
-      border: none;
-      font-size: 24px;
-      cursor: pointer;
-      color: #666;
-      padding: 0;
-      width: 30px;
-      height: 30px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 4px;
-    }
-
-    .close-btn:hover {
-      background: #f8f9fa;
-    }
-
-    .modal-footer {
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-      margin-top: 20px;
-      padding-top: 20px;
-      border-top: 1px solid #eee;
-    }
-
-    .password-strength {
-      margin-top: 10px;
-    }
-
-    .strength-bar {
-      height: 4px;
-      background: #eee;
-      border-radius: 2px;
-      overflow: hidden;
-    }
-
-    .strength-fill {
-      height: 100%;
-      transition: all 0.3s;
-    }
-
-    .strength-weak {
-      background: #e74c3c;
-      width: 25%;
-    }
-
-    .strength-medium {
-      background: #f39c12;
-      width: 60%;
-    }
-
-    .strength-strong {
-      background: #27ae60;
-      width: 100%;
-    }
-
-    .strength-text {
-      font-size: 12px;
-      color: #666;
-      margin-top: 5px;
-    }
-
-    .tags {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 5px;
-      margin-top: 10px;
-    }
-
-    .tag {
-      background: #f8f9fa;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 12px;
-      color: #666;
-    }
-
-    .tag-remove {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: #999;
-      padding: 0;
-      margin-left: 5px;
-      font-size: 12px;
-    }
-
-    .tag-remove:hover {
-      color: #e74c3c;
-    }
-
-    .checkbox-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 15px;
-    }
-
-    .checkbox-group input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-    }
-
-    .format-option {
-      border: 1px solid #eee;
-      border-radius: 4px;
-      padding: 15px;
-      margin-bottom: 10px;
-      cursor: pointer;
-      transition: background-color 0.3s;
-    }
-
-    .format-option:hover {
-      background: #f8f9fa;
-    }
-
-    .format-option.selected {
-      background: #e3f2fd;
-      border-color: #3498db;
-    }
-
-    .format-title {
-      font-weight: 600;
-      margin-bottom: 5px;
-    }
-
-    .format-description {
-      font-size: 14px;
-      color: #666;
-    }
-
-    .security-notice {
-      background: #fff3cd;
-      border: 1px solid #ffeaa7;
-      border-radius: 4px;
-      padding: 15px;
-      margin-top: 20px;
-    }
-
-    .security-notice.warning {
-      background: #f8d7da;
-      border-color: #f5c6cb;
-    }
-
-    .security-notice strong {
-      color: #856404;
-    }
-
-    .security-notice.warning strong {
-      color: #721c24;
-    }
-
-    .notification {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      padding: 15px 20px;
-      border-radius: 4px;
-      color: white;
-      font-weight: 500;
-      z-index: 2000;
-      animation: slideIn 0.3s ease-out;
-    }
-
-    .notification.success {
-      background: #27ae60;
-    }
-
-    .notification.error {
-      background: #e74c3c;
-    }
-
-    .notification.warning {
-      background: #f39c12;
-      color: white;
-    }
-
-    @keyframes slideIn {
-      from {
-        transform: translateX(100%);
-        opacity: 0;
-      }
-      to {
-        transform: translateX(0);
-        opacity: 1;
-      }
-    }
-
-    .spinner {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid #f3f3f3;
-      border-top: 2px solid #3498db;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-
-    @media (max-width: 768px) {
-      .container {
-        padding: 10px;
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SecurePass - 安全密码管理器</title>
+    <meta name="description" content="一个安全、开源的密码管理器，帮助您管理所有密码" />
+    <meta name="keywords" content="password manager, security, password, secure, open source" />
+    <meta name="author" content="SecurePass Team" />
+    <meta name="theme-color" content="#667eea" />
+    
+    <!-- 预加载关键资源 -->
+    <link rel="preload" href="/src/main.ts" as="script" />
+    <link rel="preload" href="/src/App.vue" as="script" />
+    <link rel="preload" href="/src/components/PasswordManager.vue" as="script" />
+    
+    <!-- 预连接到API服务器 -->
+    <link rel="preconnect" href="http://localhost:8000" />
+    
+    <!-- 字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    
+    <!-- 图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
       }
       
-      .app-header {
-        flex-direction: column;
-        gap: 15px;
-        align-items: flex-start;
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        color: #333;
       }
       
-      .header-actions {
-        flex-wrap: wrap;
+      #app {
+        min-height: 100vh;
+      }
+      
+      /* 加载动画 */
+      .loading-container {
+        position: fixed;
+        top: 0;
+        left: 0;
         width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
       }
       
-      .btn {
-        flex: 1;
-        min-width: 120px;
+      .loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        border-top: 3px solid #fff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
       }
       
-      .search-bar {
-        flex-direction: column;
-        align-items: stretch;
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
       }
       
-      .password-item {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
+      /* 隐藏滚动条但保持滚动功能 */
+      .hide-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
       }
       
-      .password-actions {
-        align-self: flex-end;
+      .hide-scrollbar::-webkit-scrollbar {
+        display: none;
       }
-    }
-  </style>
-</head>
-<body>
-  <div id="app">
-    <!-- 登录界面 -->
-    <div class="login-container" v-if="!isLoggedIn">
-      <div class="login-header">
-        <h1>SecurePass</h1>
-        <p>密码管理器</p>
-      </div>
       
-      <form @submit.prevent="login">
-        <div class="form-group">
-          <label for="master-password">主密码</label>
-          <input 
-            type="password" 
-            id="master-password"
-            v-model="masterPassword"
-            placeholder="请输入主密码"
-            required
-          />
-        </div>
-        
-        <div class="form-group">
-          <label>
-            <input type="checkbox" v-model="rememberPassword">
-            记住密码（当前会话）
-          </label>
-        </div>
-        
-        <button type="submit" class="btn btn-primary" :disabled="loading">
-          <span v-if="loading" class="spinner"></span>
-          <span v-else>登录</span>
-        </button>
-      </form>
-    </div>
-
-    <!-- 主应用界面 -->
-    <div class="main-app" :style="{ display: isLoggedIn ? 'block' : 'none' }">
-      <div class="container">
-        <!-- 应用头部 -->
-        <div class="app-header">
-          <div class="logo">
-            <h1>SecurePass</h1>
-          </div>
-          <div class="header-actions">
-            <button @click="showAddPasswordDialog" class="btn btn-primary">添加密码</button>
-            <button @click="showExportDialog" class="btn btn-secondary">导出</button>
-            <button @click="logout" class="btn btn-danger">退出</button>
-          </div>
-        </div>
-
-        <!-- 搜索栏 -->
-        <div class="search-bar">
-          <input 
-            type="text" 
-            v-model="searchQuery"
-            placeholder="搜索网站或用户名..."
-            class="search-input"
-            @input="searchPasswords"
-          />
-          <button @click="showAddPasswordDialog" class="btn btn-primary">添加</button>
-        </div>
-
-        <!-- 密码列表 -->
-        <div class="password-list">
-          <div v-if="loading" class="loading">
-            <span class="spinner"></span>
-            <span>加载中...</span>
-          </div>
-          
-          <div v-else-if="filteredPasswords.length === 0" class="empty-state">
-            <div>🔒</div>
-            <p>暂无密码记录</p>
-            <p>点击"添加密码"开始使用</p>
-          </div>
-          
-          <div v-else>
-            <div 
-              v-for="password in filteredPasswords" 
-              :key="password.id"
-              class="password-item"
-              :class="{ selected: selectedPasswords.has(password.id) }"
-              @click="togglePasswordSelection(password.id)"
-            >
-              <div class="site-icon">
-                {{ getSiteInitial(password.site_name) }}
-              </div>
-              
-              <div class="password-info">
-                <div class="site-name">{{ password.site_name }}</div>
-                <div class="site-url">{{ password.site_url }}</div>
-                <div class="username">{{ password.username }}</div>
-                
-                <div v-if="password.tags" class="tags">
-                  <span v-for="tag in password.get_tags()" :key="tag" class="tag">
-                    {{ tag }}
-                    <button type="button" @click.stop="removeTag(password, tag)" class="tag-remove">×</button>
-                  </span>
-                </div>
-              </div>
-              
-              <div class="password-actions">
-                <button 
-                  @click.stop="copyPassword(password)" 
-                  class="btn-icon btn-success"
-                  title="复制密码"
-                >
-                  复制
-                </button>
-                
-                <button 
-                  @click.stop="deletePassword(password)" 
-                  class="btn-icon btn-danger"
-                  title="删除"
-                >
-                  删除
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 添加密码对话框 -->
-    <div class="modal" v-if="showAddModal" @click="closeAddModal">
-      <div class="modal-content" @click.stop>
-        <div class="modal-header">
-          <h3>添加密码</h3>
-          <button @click="closeAddModal" class="close-btn">×</button>
-        </div>
-        
-        <form @submit.prevent="savePassword">
-          <div class="form-group">
-            <label for="site-name">网站名称 *</label>
-            <input 
-              type="text" 
-              id="site-name"
-              v-model="newPassword.site_name"
-              placeholder="例如：公司内网"
-              required
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="site-url">网站/IP地址 *</label>
-            <input 
-              type="text" 
-              id="site-url"
-              v-model="newPassword.site_url"
-              placeholder="例如：https://internal.company.com"
-              required
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="username">用户名/账号 *</label>
-            <input 
-              type="text" 
-              id="username"
-              v-model="newPassword.username"
-              placeholder="例如：zhangsan@company.com"
-              required
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="password">密码 *</label>
-            <div style="display: flex; gap: 10px;">
-              <input 
-                :type="showPassword ? 'text' : 'password'"
-                id="password"
-                v-model="newPassword.password"
-                placeholder="输入密码"
-                required
-                style="flex: 1;"
-              />
-              <button type="button" @click="togglePasswordVisibility" class="btn btn-secondary btn-small">
-                {{ showPassword ? '隐藏' : '显示' }}
-              </button>
-              <button type="button" @click="generatePassword" class="btn btn-secondary btn-small" title="生成强密码">
-                生成
-              </button>
-            </div>
-            
-            <div class="password-strength">
-              <div class="strength-bar">
-                <div class="strength-fill" :class="passwordStrengthClass"></div>
-              </div>
-              <div class="strength-text">{{ passwordStrengthText }}</div>
-            </div>
-          </div>
-          
-          <div class="form-group">
-            <label for="notes">备注（可选）</label>
-            <textarea 
-              id="notes"
-              v-model="newPassword.notes"
-              placeholder="添加备注信息..."
-              rows="3"
-              style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;"
-            />
-          </div>
-          
-          <div class="form-group">
-            <label>标签（可选）</label>
-            <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px;">
-              <input 
-                type="text" 
-                v-model="tagInput"
-                placeholder="输入标签，按回车添加"
-                @keyup.enter="addTag"
-                style="flex: 1;"
-              />
-            </div>
-            <div class="tags">
-              <span v-for="tag in newPassword.tags" :key="tag" class="tag">
-                {{ tag }}
-                <button type="button" @click="removeTagFromNew(tag)" class="tag-remove">×</button>
-              </span>
-            </div>
-          </div>
-          
-          <div class="modal-footer">
-            <button type="button" @click="closeAddModal" class="btn btn-secondary">取消</button>
-            <button type="submit" class="btn btn-primary" :disabled="!isFormValid">
-              保存密码
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- 导出对话框 -->
-    <div class="modal" v-if="showExportModal" @click="closeExportModal">
-      <div class="modal-content" @click.stop>
-        <div class="modal-header">
-          <h3>导出密码</h3>
-          <button @click="closeExportModal" class="close-btn">×</button>
-        </div>
-        
-        <div class="form-group">
-          <div class="checkbox-group">
-            <input type="checkbox" v-model="selectAll" @change="toggleSelectAll">
-            <label>全选 ({{ filteredPasswords.length }} 条)</label>
-          </div>
-          <button @click="clearSelection" class="btn btn-secondary btn-small">清除选择</button>
-        </div>
-        
-        <div style="max-height: 300px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px;">
-          <div 
-            v-for="password in filteredPasswords" 
-            :key="password.id"
-            class="password-item"
-            :class="{ selected: selectedPasswords.has(password.id) }"
-            @click="togglePasswordSelection(password.id)"
-          >
-            <div class="site-icon">
-              {{ getSiteInitial(password.site_name) }}
-            </div>
-            
-            <div class="password-info">
-              <div class="site-name">{{ password.site_name }}</div>
-              <div class="site-url">{{ password.site_url }}</div>
-              <div class="username">{{ password.username }}</div>
-            </div>
-            
-            <div style="width: 20px;">
-              <input type="checkbox" :value="password.id" v-model="selectedPasswords" @click.stop>
-            </div>
-          </div>
-        </div>
-        
-        <div class="form-group" style="margin-top: 20px;">
-          <label>导出格式</label>
-          <div class="format-option" @click="exportFormat = 'encrypted'" :class="{ selected: exportFormat === 'encrypted' }">
-            <div class="format-title">加密格式</div>
-            <div class="format-description">密码已加密，可在其他程序中导入使用</div>
-          </div>
-          
-          <div class="format-option" @click="exportFormat = 'plaintext'" :class="{ selected: exportFormat === 'plaintext' }">
-            <div class="format-title">明文格式</div>
-            <div class="format-description">密码为明文，仅用于备份（不推荐）</div>
-          </div>
-        </div>
-        
-        <div v-if="selectedPasswords.size > 0" class="security-notice" v-if="exportFormat === 'encrypted'">
-          <strong>安全提示：</strong> 导出文件包含加密数据，需要主密码才能解密
-        </div>
-        
-        <div v-if="selectedPasswords.size > 0" class="security-notice warning" v-else>
-          <strong>警告：</strong> 明文格式不安全，请谨慎使用
-        </div>
-        
-        <div class="modal-footer">
-          <button type="button" @click="closeExportModal" class="btn btn-secondary">取消</button>
-          <button 
-            type="button" 
-            @click="exportPasswords" 
-            class="btn btn-primary"
-            :disabled="selectedPasswords.size === 0 || exporting"
-          >
-            <span v-if="exporting" class="spinner"></span>
-            <span v-else>导出 {{ selectedPasswords.size }} 条记录</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const { createApp } = Vue;
-
-    createApp({
-      data() {
-        return {
-          isLoggedIn: false,
-          loading: false,
-          masterPassword: '',
-          rememberPassword: false,
-          searchQuery: '',
-          passwords: [],
-          selectedPasswords: new Set(),
-          selectAll: false,
-          exportFormat: 'encrypted',
-          exporting: false,
-          
-          // 添加密码对话框
-          showAddModal: false,
-          showPassword: false,
-          tagInput: '',
-          newPassword: {
-            site_name: '',
-            site_url: '',
-            username: '',
-            password: '',
-            notes: '',
-            tags: []
-          },
-          
-          // 导出对话框
-          showExportModal: false,
-          
-          // 密码强度
-          passwordStrength: 0
-        };
-      },
-
-      computed: {
-        filteredPasswords() {
-          if (!this.searchQuery) return this.passwords;
-          
-          const query = this.searchQuery.toLowerCase();
-          return this.passwords.filter(password => 
-            password.site_name.toLowerCase().includes(query) ||
-            password.site_url.toLowerCase().includes(query) ||
-            password.username.toLowerCase().includes(query)
-          );
-        },
-
-        isFormValid() {
-          return this.newPassword.site_name && 
-                 this.newPassword.site_url && 
-                 this.newPassword.username && 
-                 this.newPassword.password;
-        },
-
-        passwordStrengthClass() {
-          if (this.passwordStrength < 30) return 'strength-weak';
-          if (this.passwordStrength < 70) return 'strength-medium';
-          return 'strength-strong';
-        },
-
-        passwordStrengthText() {
-          if (this.passwordStrength < 30) return '弱';
-          if (this.passwordStrength < 70) return '中';
-          return '强';
+      /* 响应式设计 */
+      @media (max-width: 768px) {
+        .header-content {
+          flex-direction: column;
+          gap: 15px;
         }
-      },
-
-      methods: {
-        async login() {
-          this.loading = true;
-          
-          try {
-            // 模拟登录
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            this.isLoggedIn = true;
-            this.loadPasswords();
-            
-            if (this.rememberPassword) {
-              localStorage.setItem('rememberedPassword', this.masterPassword);
-            }
-            
-            this.showNotification('登录成功', 'success');
-          } catch (error) {
-            this.showNotification('登录失败，请检查主密码', 'error');
-          } finally {
-            this.loading = false;
-          }
-        },
-
-        logout() {
-          if (confirm('确定要退出登录吗？')) {
-            this.isLoggedIn = false;
-            this.masterPassword = '';
-            this.passwords = [];
-            this.selectedPasswords.clear();
-            localStorage.removeItem('rememberedPassword');
-            this.showNotification('已退出登录', 'success');
-          }
-        },
-
-        async loadPasswords() {
-          this.loading = true;
-          
-          try {
-            // 模拟数据
-            this.passwords = [
-              {
-                id: 1,
-                site_name: '公司内网',
-                site_url: 'https://internal.company.com',
-                username: 'zhangsan@company.com',
-                encrypted_password: 'encrypted_data_here',
-                notes: '公司内部系统',
-                tags: ['工作', '重要'],
-                created_at: '2024-01-01T00:00:00Z',
-                updated_at: '2024-01-01T00:00:00Z',
-                get_tags: function() { return this.tags || []; }
-              },
-              {
-                id: 2,
-                site_name: '开发服务器',
-                site_url: '192.168.1.100:8080',
-                username: 'admin',
-                encrypted_password: 'encrypted_data_here',
-                notes: '开发环境',
-                tags: ['开发', '服务器'],
-                created_at: '2024-01-02T00:00:00Z',
-                updated_at: '2024-01-02T00:00:00Z',
-                get_tags: function() { return this.tags || []; }
-              }
-            ];
-            
-            this.showNotification('密码加载成功', 'success');
-          } catch (error) {
-            this.showNotification('加载密码失败', 'error');
-          } finally {
-            this.loading = false;
-          }
-        },
-
-        async searchPasswords() {
-          if (!this.searchQuery) {
-            this.loadPasswords();
-            return;
-          }
-          
-          this.loading = true;
-          
-          try {
-            // 模拟搜索
-            await new Promise(resolve => setTimeout(resolve, 500));
-            this.loadPasswords();
-            this.showNotification('搜索完成', 'success');
-          } catch (error) {
-            this.showNotification('搜索失败', 'error');
-          } finally {
-            this.loading = false;
-          }
-        },
-
-        togglePasswordSelection(id) {
-          if (this.selectedPasswords.has(id)) {
-            this.selectedPasswords.delete(id);
-          } else {
-            this.selectedPasswords.add(id);
-          }
-          this.selectAll = this.selectedPasswords.size === this.filteredPasswords.length;
-        },
-
-        toggleSelectAll() {
-          if (this.selectAll) {
-            this.filteredPasswords.forEach(password => {
-              this.selectedPasswords.add(password.id);
-            });
-          } else {
-            this.selectedPasswords.clear();
-          }
-        },
-
-        async copyPassword(password) {
-          try {
-            // 模拟解密
-            const decryptedPassword = 'decrypted_password_' + password.id;
-            
-            // 复制到剪贴板
-            await navigator.clipboard.writeText(decryptedPassword);
-            
-            this.showNotification('密码已复制到剪贴板', 'success');
-            
-            // 3秒后清除剪贴板
-            setTimeout(async () => {
-              await navigator.clipboard.writeText('');
-            }, 3000);
-          } catch (error) {
-            this.showNotification('复制密码失败', 'error');
-          }
-        },
-
-        deletePassword(password) {
-          if (confirm('确定要删除这个密码吗？')) {
-            const index = this.passwords.findIndex(p => p.id === password.id);
-            if (index > -1) {
-              this.passwords.splice(index, 1);
-              this.selectedPasswords.delete(password.id);
-              this.showNotification('密码已删除', 'success');
-            }
-          }
-        },
-
-        showAddPasswordDialog() {
-          this.showAddModal = true;
-        },
-
-        closeAddModal() {
-          this.showAddModal = false;
-          this.resetPasswordForm();
-        },
-
-        resetPasswordForm() {
-          this.newPassword = {
-            site_name: '',
-            site_url: '',
-            username: '',
-            password: '',
-            notes: '',
-            tags: []
-          };
-          this.tagInput = '';
-          this.passwordStrength = 0;
-        },
-
-        togglePasswordVisibility() {
-          this.showPassword = !this.showPassword;
-        },
-
-        generatePassword() {
-          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
-          let password = '';
-          for (let i = 0; i < 16; i++) {
-            password += chars.charAt(Math.floor(Math.random() * chars.length));
-          }
-          this.newPassword.password = password;
-          this.updatePasswordStrength();
-        },
-
-        updatePasswordStrength() {
-          const password = this.newPassword.password;
-          let strength = 0;
-          
-          // 长度评分
-          strength += Math.min(password.length / 4, 25);
-          
-          // 复杂度评分
-          if (password.match(/[a-z]/)) strength += 15;
-          if (password.match(/[A-Z]/)) strength += 15;
-          if (password.match(/[0-9]/)) strength += 15;
-          if (password.match(/[^a-zA-Z0-9]/)) strength += 25;
-          
-          this.passwordStrength = Math.min(strength, 100);
-        },
-
-        addTag() {
-          if (this.tagInput.trim() && !this.newPassword.tags.includes(this.tagInput.trim())) {
-            this.newPassword.tags.push(this.tagInput.trim());
-            this.tagInput = '';
-          }
-        },
-
-        removeTagFromNew(tag) {
-          this.newPassword.tags = this.newPassword.tags.filter(t => t !== tag);
-        },
-
-        removeTag(password, tag) {
-          password.tags = password.tags.filter(t => t !== tag);
-        },
-
-        async savePassword() {
-          try {
-            // 模拟保存
-            const newEntry = {
-              id: Date.now(),
-              ...this.newPassword,
-              encrypted_password: 'encrypted_' + Date.now(),
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              get_tags: function() { return this.tags || []; }
-            };
-            
-            this.passwords.unshift(newEntry);
-            this.closeAddModal();
-            this.showNotification('密码保存成功', 'success');
-          } catch (error) {
-            this.showNotification('保存密码失败', 'error');
-          }
-        },
-
-        showExportDialog() {
-          this.showExportModal = true;
-        },
-
-        closeExportModal() {
-          this.showExportModal = false;
-          this.selectedPasswords.clear();
-          this.selectAll = false;
-        },
-
-        clearSelection() {
-          this.selectedPasswords.clear();
-          this.selectAll = false;
-        },
-
-        async exportPasswords() {
-          try {
-            const selectedIds = Array.from(this.selectedPasswords);
-            
-            if (selectedIds.length === 0) {
-              this.showNotification('请选择要导出的记录', 'warning');
-              return;
-            }
-            
-            // 模拟导出
-            const exportData = {
-              format: this.exportFormat,
-              count: selectedIds.length,
-              timestamp: new Date().toISOString(),
-              data: 'exported_data_' + Date.now()
-            };
-            
-            // 创建下载
-            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `passwords_export_${new Date().toISOString().split('T')[0]}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            
-            this.closeExportModal();
-            this.showNotification(`成功导出 ${selectedIds.length} 条记录`, 'success');
-          } catch (error) {
-            this.showNotification('导出失败', 'error');
-          }
-        },
-
-        showNotification(message, type = 'info') {
-          const notification = document.createElement('div');
-          notification.className = `notification ${type}`;
-          notification.textContent = message;
-          document.body.appendChild(notification);
-          
-          setTimeout(() => {
-            notification.remove();
-          }, 3000);
-        },
-
-        getSiteInitial(siteName) {
-          return siteName.charAt(0).toUpperCase();
+        
+        .header-actions {
+          flex-wrap: wrap;
+          justify-content: center;
         }
-      },
-
-      mounted() {
-        // 检查是否有记住的密码
-        const rememberedPassword = localStorage.getItem('rememberedPassword');
-        if (rememberedPassword) {
-          this.masterPassword = rememberedPassword;
-          this.rememberPassword = true;
+        
+        .welcome-actions {
+          flex-direction: column;
+          width: 100%;
+        }
+        
+        .welcome-actions .el-button {
+          width: 100%;
         }
       }
-    }).mount('#app');
-  </script>
-</body>
+      
+      @media (max-width: 480px) {
+        .content-wrapper {
+          padding: 0 10px;
+        }
+        
+        .password-item {
+          flex-direction: column;
+          gap: 10px;
+          align-items: flex-start;
+        }
+        
+        .password-actions {
+          width: 100%;
+          justify-content: flex-end;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="loading-container" id="loading-container">
+      <div class="loading-spinner"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+    <script>
+      // 检测浏览器支持
+      if (!window.crypto || !window.crypto.subtle) {
+        alert('您的浏览器不支持加密功能，请使用现代浏览器访问。');
+      }
+      
+      // 检测 HTTPS
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        console.warn('建议使用 HTTPS 协议以确保安全性');
+      }
+      
+      // 页面加载完成后隐藏加载动画
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const loadingContainer = document.getElementById('loading-container');
+          if (loadingContainer) {
+            loadingContainer.style.opacity = '0';
+            loadingContainer.style.transition = 'opacity 0.3s ease';
+            setTimeout(() => {
+              loadingContainer.style.display = 'none';
+            }, 300);
+          }
+        }, 500);
+      });
+    </script>
+  </body>
 </html>
