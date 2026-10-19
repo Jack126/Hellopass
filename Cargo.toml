@@ -31,6 +31,10 @@ path = "src/main_fixed.rs"
 name = "securepass_tauri"
 path = "src/main_tauri.rs"
 
+[[bin]]
+name = "securepass_complete"
+path = "src/main_complete.rs"
+
 [profile.dev]
 opt-level = 0
 

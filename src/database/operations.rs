@@ -1,4 +1,4 @@
-use crate::database::models::*;
+use crate::api::{NewPassword, PasswordEntry};
 use crate::database::Database;
 use thiserror::Error;
 
@@ -23,9 +23,9 @@ impl PasswordOperations {
     }
 
     /// 添加密码
-    pub async fn add_password(&self, password: NewPassword) -> Result<Password, OperationError> {
+    pub async fn add_password(&self, password: NewPassword) -> Result<PasswordEntry, OperationError> {
         // 这里应该实现实际的数据库操作
-        Ok(Password {
+        Ok(PasswordEntry {
             id: 1,
             site_name: password.site_name,
             site_url: password.site_url,
@@ -45,13 +45,13 @@ impl PasswordOperations {
     }
 
     /// 获取所有密码
-    pub async fn get_passwords(&self) -> Result<Vec<Password>, OperationError> {
+    pub async fn get_passwords(&self) -> Result<Vec<PasswordEntry>, OperationError> {
         // 这里应该实现实际的数据库操作
         Ok(vec![])
     }
 
     /// 搜索密码
-    pub async fn search_passwords(&self, query: &str) -> Result<Vec<Password>, OperationError> {
+    pub async fn search_passwords(&self, query: &str) -> Result<Vec<PasswordEntry>, OperationError> {
         // 这里应该实现实际的数据库操作
         Ok(vec![])
     }
