@@ -185,6 +185,12 @@ fn main() {
             std::fs::create_dir_all(&app_dir).ok();
             let config_dir = app_dir.join("config");
             std::fs::create_dir_all(&config_dir).ok();
+            // 数据库位置：
+            // - 开发构建：固定用仓库根目录的 securepass.db，方便直接用 sqlite3 查看/备份；
+            // - 发布构建：仍用系统 app data 目录，避免安装目录只读导致无法写入。
+            #[cfg(debug_assertions)]
+            let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("securepass.db");
+            #[cfg(not(debug_assertions))]
             let db_path = app_dir.join("securepass.db");
 
             // 管理保险库运行时（Mutex 保证 Send+Sync）
