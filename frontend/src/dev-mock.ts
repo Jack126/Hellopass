@@ -84,16 +84,6 @@ function handle(cmd: string, args: any) {
       return ok(undefined)
     case 'get_password_stats':
       return ok({ total_count: entries.length, category_counts: {}, tag_counts: {}, recent_access_count: 0 })
-    case 'export_passwords':
-      return ok(JSON.stringify(entries, null, 2))
-    case 'export_passwords_csv':
-      return ok('site_name,username')
-    case 'export_selected': {
-      const ids: number[] = args?.ids || []
-      const sel = entries.filter((e) => ids.includes(e.id))
-      if (args?.format === 'csv') return ok('site_name,username')
-      return ok(JSON.stringify(sel, null, 2))
-    }
     case 'import_passwords':
       return ok({ imported_count: 0, skipped_count: 0, updated_count: 0, error_count: 0, errors: [] })
     case 'export_backup':

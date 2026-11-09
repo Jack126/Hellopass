@@ -46,6 +46,15 @@
               >
                 设置
               </el-button>
+              <el-button
+                v-if="passwordsLoaded"
+                type="danger"
+                plain
+                :icon="Lock"
+                @click="lockVault('已手动锁定保险库')"
+              >
+                锁定
+              </el-button>
             </div>
           </div>
         </el-header>
@@ -436,12 +445,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs';
 import { Download, Upload, DocumentCopy, Setting, Lock } from '@element-plus/icons-vue';
 import PasswordManager from './components/PasswordManager.vue';
-import { authApi, importExportApi, notificationApi, passwordApi, type PasswordEntry, type PasswordPolicy, type PasswordExpiryInfo, type AuditLogEntry, type IntegrityReport } from './api';
+import { authApi, importExportApi, notificationApi, passwordApi, type PasswordPolicy, type PasswordExpiryInfo, type AuditLogEntry, type IntegrityReport } from './api';
 
 // 响应式数据
 const passwordsLoaded = ref(false);
@@ -470,9 +479,6 @@ const integrityReport = ref<IntegrityReport | null>(null);
 const integrityLoading = ref(false);
 
 // 导出设置
-const exportFormat = ref('json');
-const exportCandidates = ref<PasswordEntry[]>([]);
-const exportSelectedIds = ref<number[]>([]);
 const exportPassword = ref('');
 const exportPasswordConfirm = ref('');
 
@@ -582,6 +588,108 @@ const showTutorial = () => {
   notificationApi.showNotification('使用教程功能开发中...', 'info');
 };
 
+// ===================== 自动锁定 =====================
+const SETTINGS_STORAGE_KEY = 'securepass.settings';
+const IDLE_CHECK_INTERVAL_MS = 5000;
+const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+let idleTimer: number | undefined;
+let lastActivityAt = Date.now();
+
+const loadSettings = () => {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { autoLock?: boolean; lockTime?: number };
+    if (typeof saved.autoLock === 'boolean') settingsForm.value.autoLock = saved.autoLock;
+    if (typeof saved.lockTime === 'number') {
+      settingsForm.value.lockTime = Math.min(60, Math.max(1, Math.round(saved.lockTime)));
+    }
+  } catch {
+    // 本地设置损坏时使用默认值
+  }
+};
+
+const persistSettings = () => {
+  try {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        autoLock: settingsForm.value.autoLock,
+        lockTime: settingsForm.value.lockTime,
+      })
+    );
+  } catch {
+    // localStorage 不可用时忽略
+  }
+};
+
+/// 把前端设置的锁定时长同步给后端会话（后端在超时后会丢弃解密密钥）
+const syncSessionTimeout = async () => {
+  if (!passwordsLoaded.value) return;
+  try {
+    await authApi.setSessionTimeout(settingsForm.value.lockTime);
+  } catch {
+    // 非致命：后端保留默认 30 分钟
+  }
+};
+
+const markActivity = () => {
+  lastActivityAt = Date.now();
+};
+
+const stopIdleWatch = () => {
+  if (idleTimer !== undefined) {
+    clearInterval(idleTimer);
+    idleTimer = undefined;
+  }
+};
+
+/// 锁定保险库：卸载 PasswordManager 以销毁内存中的明文，再要求重新输入主密码
+const lockVault = async (reason = '保险库已锁定') => {
+  if (!passwordsLoaded.value) return;
+  stopIdleWatch();
+  passwordsLoaded.value = false;
+  masterPassword.value = '';
+  settingsForm.value.masterPassword = '';
+  exportPassword.value = '';
+  exportPasswordConfirm.value = '';
+  auditLogs.value = [];
+  expiringPasswords.value = [];
+  integrityReport.value = null;
+  passwordPolicy.value = null;
+  showSecurityDialog.value = false;
+  showExportDialog.value = false;
+  showImportDialog.value = false;
+  showBackupDialog.value = false;
+  showSettingsDialog.value = false;
+  try {
+    await authApi.logout();
+  } catch {
+    // 后端可能已因空闲超时自行锁定
+  }
+  authMode.value = 'unlock';
+  authError.value = '';
+  showAuth.value = true;
+  notificationApi.showNotification(reason, 'warning');
+};
+
+const checkIdle = () => {
+  if (!passwordsLoaded.value || !settingsForm.value.autoLock) return;
+  if (Date.now() - lastActivityAt >= settingsForm.value.lockTime * 60 * 1000) {
+    lockVault(`已闲置 ${settingsForm.value.lockTime} 分钟，保险库已自动锁定`);
+  }
+};
+
+const startIdleWatch = () => {
+  stopIdleWatch();
+  lastActivityAt = Date.now();
+  idleTimer = window.setInterval(checkIdle, IDLE_CHECK_INTERVAL_MS);
+};
+
+const onBackendLocked = () => {
+  lockVault('会话已超时，保险库已锁定');
+};
+
 const openSecurityOverview = async () => {
   showSecurityDialog.value = true;
   securityLoading.value = true;
@@ -614,21 +722,10 @@ const runIntegrityCheck = async () => {
   }
 };
 
-const openExportDialog = async () => {
-  exportSelectedIds.value = [];
-  exportCandidates.value = [];
+const openExportDialog = () => {
+  exportPassword.value = '';
+  exportPasswordConfirm.value = '';
   showExportDialog.value = true;
-  try {
-    exportCandidates.value = await passwordApi.getPasswords();
-  } catch (e) {
-    // 加载失败时仍允许全量导出
-  }
-};
-
-const selectAllExports = () => {
-  exportSelectedIds.value = exportCandidates.value
-    .map((p) => p.id)
-    .filter((id): id is number => typeof id === 'number');
 };
 
 const handleEncryptedExport = async () => {
@@ -661,34 +758,6 @@ const handleEncryptedExport = async () => {
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     notificationApi.showNotification('加密导出失败：' + msg, 'error');
-  } finally {
-    exporting.value = false;
-  }
-};
-
-const handleExport = async () => {
-  exporting.value = true;
-  try {
-    const format = exportFormat.value === 'csv' ? 'csv' : 'json';
-    const content = exportSelectedIds.value.length > 0
-      ? await importExportApi.exportSelected(exportSelectedIds.value, format)
-      : await importExportApi.exportPasswords(format);
-    const blob = new Blob([content], {
-      type: format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `securepass-export-${Date.now()}.${format}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    notificationApi.showNotification('导出成功', 'success');
-    showExportDialog.value = false;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    notificationApi.showNotification(`导出失败：${msg}`, 'error');
   } finally {
     exporting.value = false;
   }
@@ -819,11 +888,14 @@ const handleBackupFile = async (event: Event) => {
 const saveSettings = async () => {
   savingSettings.value = true;
   try {
-    // 这里应该调用实际的设置保存API
-    notificationApi.showNotification('设置保存成功', 'success');
+    persistSettings();
+    await syncSessionTimeout();
+    if (passwordsLoaded.value) startIdleWatch();
+    notificationApi.showNotification('设置已保存', 'success');
     showSettingsDialog.value = false;
   } catch (error) {
-    notificationApi.showNotification('设置保存失败', 'error');
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification('设置保存失败：' + msg, 'error');
   } finally {
     savingSettings.value = false;
   }
@@ -831,6 +903,13 @@ const saveSettings = async () => {
 
 // 生命周期
 onMounted(async () => {
+  loadSettings();
+  // 任何用户活动都重置空闲计时
+  ACTIVITY_EVENTS.forEach((ev) =>
+    window.addEventListener(ev, markActivity, { passive: true })
+  );
+  window.addEventListener('securepass:locked', onBackendLocked);
+
   // 启动时检查是否已设置主密码：未设置则引导设置，已设置则要求解锁
   try {
     const set = await authApi.isSet();
@@ -839,6 +918,12 @@ onMounted(async () => {
     authMode.value = 'unlock';
   }
   showAuth.value = true;
+});
+
+onUnmounted(() => {
+  stopIdleWatch();
+  ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, markActivity));
+  window.removeEventListener('securepass:locked', onBackendLocked);
 });
 
 // 主密码设置 / 解锁提交
@@ -867,6 +952,8 @@ const submitAuth = async () => {
     masterPassword.value = '';
     showAuth.value = false;
     passwordsLoaded.value = true;
+    await syncSessionTimeout();
+    startIdleWatch();
   } catch (e: any) {
     authError.value = e?.message || '操作失败，请重试';
   } finally {

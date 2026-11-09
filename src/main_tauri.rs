@@ -91,12 +91,6 @@ fn get_password_stats(state: State<'_, VaultState>) -> ApiResponse<PasswordStats
 }
 
 #[tauri::command]
-fn export_passwords(state: State<'_, VaultState>) -> ApiResponse<String> {
-    let mut g = state.lock().unwrap();
-    g.export_passwords()
-}
-
-#[tauri::command]
 fn import_passwords(state: State<'_, VaultState>, data: String) -> ApiResponse<ImportResult> {
     let mut g = state.lock().unwrap();
     g.import_passwords(data)
@@ -126,16 +120,12 @@ fn import_encrypted(state: State<'_, VaultState>, data: String, export_password:
     g.import_encrypted(data, export_password)
 }
 
+/// 前端「自动锁定时间」设置同步给后端会话超时。
 #[tauri::command]
-fn export_passwords_csv(state: State<'_, VaultState>) -> ApiResponse<String> {
+fn set_session_timeout(state: State<'_, VaultState>, minutes: i64) -> ApiResponse<()> {
     let mut g = state.lock().unwrap();
-    g.export_passwords_csv()
-}
-
-#[tauri::command]
-fn export_selected(state: State<'_, VaultState>, ids: Vec<i64>, format: String) -> ApiResponse<String> {
-    let mut g = state.lock().unwrap();
-    g.export_selected(ids, format)
+    g.set_session_timeout(minutes);
+    ApiResponse::ok(())
 }
 
 #[tauri::command]
@@ -266,10 +256,8 @@ fn main() {
             update_password,
             delete_password,
             get_password_stats,
-            export_passwords,
-            export_passwords_csv,
-            export_selected,
             import_passwords,
+            set_session_timeout,
             export_backup,
             restore_backup,
             export_encrypted,

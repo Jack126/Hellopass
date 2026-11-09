@@ -26,7 +26,12 @@ export interface ApiResponse<T> {
 async function request<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const res = await invoke<ApiResponse<T>>(cmd, args);
   if (!res.success) {
-    throw new Error(res.error || '操作失败');
+    const message = res.error || '操作失败';
+    // 后端会话已超时/被锁定时，通知 UI 卸载明文并回到解锁界面
+    if (message.includes('保险库已锁定')) {
+      window.dispatchEvent(new CustomEvent('securepass:locked'));
+    }
+    throw new Error(message);
   }
   return res.data as T;
 }
@@ -68,6 +73,9 @@ export const authApi = {
     request<undefined>('unlock', { masterPassword }),
   // 锁定保险库
   logout: () => request<undefined>('lock'),
+  // 同步空闲超时（分钟）到后端会话
+  setSessionTimeout: (minutes: number) =>
+    request<undefined>('set_session_timeout', { minutes }),
   // 修改主密码
   changePassword: (oldPassword: string, newPassword: string) =>
     request<undefined>('change_master_password', {
@@ -87,14 +95,6 @@ export const authApi = {
 
 // ===================== 导入导出 API =====================
 export const importExportApi = {
-  // 导出全部密码：json -> export_passwords，csv -> export_passwords_csv
-  exportPasswords: (format: 'json' | 'csv' = 'json') =>
-    format === 'csv'
-      ? request<string>('export_passwords_csv')
-      : request<string>('export_passwords'),
-  // 按 id 集合导出（format: json/csv）
-  exportSelected: (ids: number[], format: 'json' | 'csv' = 'json') =>
-    request<string>('export_selected', { ids, format }),
   // 导入密码：后端自动识别 JSON/CSV，返回导入统计
   importPasswords: (data: string) =>
     request<ImportResult>('import_passwords', { data }),

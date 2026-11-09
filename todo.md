@@ -8,8 +8,9 @@
 - 会话安全：30 分钟空闲超时；5 次失败锁定 30 分钟；解锁/锁定/失败写审计
 - 审计日志：unlock/lock/add/update/delete/change_master_password 落库；get_audit_logs
 - 密码策略：强度评估；过期（默认 90 天）；历史 5 条防复用
-- 导入导出：JSON/CSV 导出；导入自动识别 + 去重统计
-- Tauri 2：VaultRuntime + Mutex；19 个命令；程序化创建窗口 + 托盘；配置文件迁移 v2；图标与 capabilities
+- 导入导出：加密导出（.spb）；导入自动识别 + 去重统计（明文导出命令已移除）
+- 会话：前端空闲自动锁定 + 手动锁定按钮，设置项落 localStorage 并同步后端超时
+- Tauri 2：VaultRuntime + Mutex；24 个命令；程序化创建窗口 + 托盘；配置文件迁移 v2；图标与 capabilities
 - 前端：主密码设置/解锁；列表/增删改/搜索/分类；导入/导出；安全概览（策略/过期/审计）
 - 工程：无头单测 10 个通过；securepass bin 0 警告
 
@@ -28,9 +29,9 @@
 ### 3. 审计日志保留策略 ✅
 - [x] 解锁时自动清理超过 90 天的 audit_logs；另提供 purge_old_audit_logs(days) 手动接口与测试
 
-### 4. 多选导出 ✅
-- [x] 后端 export_selected(ids, format)（JSON/CSV）
-- [x] 前端导出弹窗列出条目勾选 + 全选/清空；不选则导出全部
+### 4. 导出（已改为仅加密导出）
+- [x] 明文 JSON/CSV 导出命令（export_passwords / export_passwords_csv / export_selected）已移除
+- [x] 统一走 export_encrypted：独立导出密码 + AES-256-GCM + 自包含 .spb 包
 
 ### 5. 密码生成器 ✅（固定 16 位）
 - [x] 前端使用 crypto.getRandomValues 生成 16 位强随机密码（大小写+数字+特殊字符）

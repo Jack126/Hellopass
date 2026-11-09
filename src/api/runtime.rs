@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use chrono::{Duration, DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use base64::Engine;
@@ -32,45 +31,6 @@ const AUDIT_RETENTION_DAYS: i64 = 90;
 struct LockoutState {
     failed_attempts: u32,
     lockout_until: Option<String>,
-}
-
-/// 将条目渲染为 CSV（首行表头），供全量/多选导出复用。
-fn entries_to_csv(entries: &[PasswordEntry]) -> String {
-    let mut buf = String::new();
-    let _ = writeln!(buf, "site_name,site_url,username,password,notes,category,tags");
-    for e in entries {
-        let tags = e.tags.join(";");
-        let _ = writeln!(
-            buf,
-            "{},{},{},{},{},{},{}",
-            csv_field(&e.site_name),
-            csv_field(&e.site_url),
-            csv_field(&e.username),
-            csv_field(e.password.as_deref().unwrap_or("")),
-            csv_field(e.notes.as_deref().unwrap_or("")),
-            csv_field(&e.category),
-            csv_field(&tags),
-        );
-    }
-    buf
-}
-
-/// CSV 字段转义：含逗号/引号/换行的字段用双引号包裹并转义内部引号。
-fn csv_field(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        let mut inner = String::with_capacity(s.len());
-        for c in s.chars() {
-            if c == '"' {
-                inner.push('"');
-                inner.push('"');
-            } else {
-                inner.push(c);
-            }
-        }
-        format!("{}{}{}", '"', inner, '"')
-    } else {
-        s.to_string()
-    }
 }
 
 /// 保险库运行时：管理主密码设置/解锁状态，并持有已解密的保险库（PasswordOperations）。
@@ -356,6 +316,11 @@ impl VaultRuntime {
         }
     }
 
+    /// 调整空闲超时（分钟），由前端「自动锁定」设置同步进来。
+    pub fn set_session_timeout(&mut self, timeout_minutes: i64) {
+        self.session_timeout = Duration::minutes(timeout_minutes.clamp(1, 24 * 60));
+    }
+
     /// 配置会话安全参数（用于测试或按策略调整）。
     pub fn set_session_limits(&mut self, timeout_minutes: i64, max_attempts: u32, lockout_minutes: i64) {
         self.session_timeout = Duration::minutes(timeout_minutes);
@@ -608,77 +573,7 @@ impl VaultRuntime {
     }
 
 
-    /// 导出全部密码为 JSON 字符串（含明文，导出文件请妥善保管/加密）。
-    pub fn export_passwords(&mut self) -> ApiResponse<String> {
-        if !self.enforce_session() {
-            return locked();
-        }
-        let result = self.with_vault(|v| {
-            let entries = v.get_passwords()?;
-            serde_json::to_string_pretty(&entries)
-                .map_err(|e| OperationError::DatabaseError(format!("序列化失败: {}", e)))
-        });
-        if result.success {
-            self.refresh_session();
-        }
-        result
-    }
-
-    /// 导出全部密码为 CSV 字符串（含明文）。
-    pub fn export_passwords_csv(&mut self) -> ApiResponse<String> {
-        if !self.enforce_session() {
-            return locked();
-        }
-        let result = self.with_vault(|v| {
-            let entries = v.get_passwords()?;
-            let mut buf = String::from("site_name,site_url,username,password,notes,category,tags\n");
-            for e in &entries {
-                let tags = e.tags.join(";");
-                buf.push_str(&format!(
-                    "{},{},{},{},{},{},{}\n",
-                    csv_field(&e.site_name),
-                    csv_field(&e.site_url),
-                    csv_field(&e.username),
-                    csv_field(e.password.as_deref().unwrap_or("")),
-                    csv_field(e.notes.as_deref().unwrap_or("")),
-                    csv_field(&e.category),
-                    csv_field(&tags),
-                ));
-            }
-            Ok(buf)
-        });
-        if result.success {
-            self.refresh_session();
-        }
-        result
-    }
-
     /// 导入密码（自动识别 JSON 或 CSV）。返回导入统计。
-    /// 导出指定 id 集合的条目（format = "csv" 或 JSON）。
-    pub fn export_selected(&mut self, ids: Vec<i64>, format: String) -> ApiResponse<String> {
-        if !self.enforce_session() {
-            return locked();
-        }
-        let result = self.with_vault(|v| {
-            let all = v.get_passwords()?;
-            let set: HashSet<i64> = ids.iter().copied().collect();
-            let selected: Vec<PasswordEntry> = all
-                .into_iter()
-                .filter(|e| e.id.map(|i| set.contains(&i)).unwrap_or(false))
-                .collect();
-            if format == "csv" {
-                Ok(entries_to_csv(&selected))
-            } else {
-                serde_json::to_string_pretty(&selected)
-                    .map_err(|e| OperationError::DatabaseError(format!("序列化失败: {}", e)))
-            }
-        });
-        if result.success {
-            self.refresh_session();
-        }
-        result
-    }
-
     pub fn import_passwords(&mut self, data: String) -> ApiResponse<ImportResult> {
         if !self.enforce_session() {
             return locked();
@@ -1212,49 +1107,6 @@ mod tests {
     }
 
     #[test]
-    fn export_selected_filters_ids() {
-        let (db, cfg) = tmp();
-        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
-        rt.setup("StrongPass123!");
-        assert!(rt.unlock("StrongPass123!").success);
-        let a = rt.add_password(NewPassword {
-            site_name: "a.com".into(),
-            site_url: "https://a.com".into(),
-            username: "alice".into(),
-            password: "pass-a".into(),
-            notes: None,
-            tags: None,
-            category: None,
-            priority: None,
-        }).data.unwrap();
-        let b = rt.add_password(NewPassword {
-            site_name: "b.com".into(),
-            site_url: "https://b.com".into(),
-            username: "bob".into(),
-            password: "pass-b".into(),
-            notes: None,
-            tags: None,
-            category: None,
-            priority: None,
-        }).data.unwrap();
-
-        let json = rt.export_selected(vec![a.id.unwrap()], "json".into());
-        assert!(json.success);
-        let s = json.data.unwrap();
-        assert!(s.contains("a.com"));
-        assert!(!s.contains("b.com"));
-
-        let csv = rt.export_selected(vec![b.id.unwrap()], "csv".into());
-        assert!(csv.success);
-        let c = csv.data.unwrap();
-        assert!(c.contains("b.com"));
-        assert!(!c.contains("a.com"));
-
-        let _ = std::fs::remove_file(&db);
-        let _ = std::fs::remove_dir_all(&cfg);
-    }
-
-    #[test]
     fn setup_twice_rejected() {
         let (db, cfg) = tmp();
         let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
@@ -1359,7 +1211,6 @@ mod tests {
         assert!(upd.success);
 
         assert_eq!(rt.get_password_stats().data.unwrap().total_count, 2);
-        assert!(rt.export_selected(vec![b.id.unwrap()], "json".into()).success);
         assert!(rt.get_audit_logs().success);
         assert!(rt.check_integrity().success);
 
@@ -1547,9 +1398,8 @@ mod tests {
             category: Some("general".into()),
             priority: Some(1),
         });
-        let exported = rt.export_passwords();
-        assert!(exported.success);
-        let json = exported.data.unwrap();
+        // 用列表接口拿到的条目序列化成 JSON，再喂回导入（验证去重逻辑）
+        let json = serde_json::to_string(&rt.get_passwords().data.unwrap()).unwrap();
         let imp = rt.import_passwords(json.clone());
         assert!(imp.success, "import: {:?}", imp.error);
         assert!(imp.data.as_ref().unwrap().skipped_count >= 1);
