@@ -195,21 +195,19 @@ impl PasswordOperations {
         let category = p.category.unwrap_or(current.category);
         let priority = p.priority.unwrap_or(current.priority);
         let tags = p.tags.unwrap_or(current.tags);
-        // 空字符串视为“不修改密码”，仅在有非空新密码时才重新加密
-        let password_changed = p.password.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
-        // 防复用：新密码不得与当前密码或最近 PASSWORD_HISTORY_LIMIT 次历史密码相同
-        if let Some(new_password) = p.password.as_ref().filter(|_| password_changed) {
-            if Some(new_password.as_str()) == current.password.as_deref()
-                || self.is_password_reused(p.id, new_password)?
-            {
-                return Err(OperationError::ValidationError(format!(
-                    "新密码不能与当前密码或最近 {} 次使用过的密码相同",
-                    PASSWORD_HISTORY_LIMIT
-                )));
-            }
+        // 空字符串视为“不修改密码”；与当前密码相同也视为未修改（表单原样提交不应被当成复用）
+        let submitted_password = p.password.clone().unwrap_or_default();
+        let password_changed = !submitted_password.is_empty()
+            && Some(submitted_password.as_str()) != current.password.as_deref();
+        // 防复用：只拦截“改回一个历史密码”
+        if password_changed && self.is_password_reused(p.id, &submitted_password)? {
+            return Err(OperationError::ValidationError(format!(
+                "新密码不能与最近 {} 次使用过的密码相同",
+                PASSWORD_HISTORY_LIMIT
+            )));
         }
         let password_plain = if password_changed {
-            p.password.clone().unwrap()
+            submitted_password
         } else {
             current.password.unwrap_or_default()
         };

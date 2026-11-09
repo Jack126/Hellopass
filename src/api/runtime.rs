@@ -1021,7 +1021,8 @@ mod tests {
             category: None,
             priority: None,
         });
-        assert!(!same.success, "reuse of current/historical password must be blocked");
+        // 原样提交当前密码 = 未修改，应当成功（否则“编辑其他字段”会永远保存失败）
+        assert!(same.success, "same password should be treated as unchanged");
 
         let diff = rt.update_password(UpdatePassword {
             id,
@@ -1035,6 +1036,20 @@ mod tests {
             priority: None,
         });
         assert!(diff.success);
+
+        // 但真的改回历史密码必须被拦截
+        let back = rt.update_password(UpdatePassword {
+            id,
+            site_name: None,
+            site_url: None,
+            username: None,
+            password: Some("first-pass".into()),
+            notes: None,
+            tags: None,
+            category: None,
+            priority: None,
+        });
+        assert!(!back.success, "改回历史密码应被拦截");
 
         let pol = rt.get_password_policy();
         assert!(pol.success);

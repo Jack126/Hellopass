@@ -6,7 +6,7 @@
           <h2>🔒 SecurePass 密码管理器</h2>
           <el-button 
             type="primary" 
-            @click="showAddDialog = true"
+            @click="openAddDialog"
             :icon="Plus"
           >
             添加密码
@@ -41,7 +41,7 @@
       
       <div v-else-if="passwords.length === 0" class="empty-state">
         <el-empty description="暂无密码">
-          <el-button type="primary" @click="showAddDialog = true">
+          <el-button type="primary" @click="openAddDialog">
             添加第一个密码
           </el-button>
         </el-empty>
@@ -143,6 +143,8 @@
       v-model="showAddDialog"
       :title="editingPassword ? '编辑密码' : '添加密码'"
       width="500px"
+      destroy-on-close
+      @closed="resetForm"
     >
       <el-form 
         ref="passwordFormRef"
@@ -167,7 +169,7 @@
             <el-input
               v-model="passwordForm.password"
               type="password"
-              placeholder="请输入密码"
+              :placeholder="editingPassword ? '留空表示不修改密码' : '请输入密码'"
               show-password
               style="flex: 1;"
             />
@@ -341,7 +343,21 @@ const passwordForm = ref({
 
 // 表单验证规则
 const passwordFormRef = ref();
-const passwordRules = {
+
+// 编辑时密码留空代表“不修改”，因此只有新增才强制必填
+const validatePasswordField = (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+  if (!editingPassword.value && !value) {
+    callback(new Error('请输入密码'));
+    return;
+  }
+  if (value && value.length < 6) {
+    callback(new Error('密码长度至少6位'));
+    return;
+  }
+  callback();
+};
+
+const passwordRules = computed(() => ({
   site_name: [
     { required: true, message: '请输入网站名称', trigger: 'blur' },
     { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
@@ -353,10 +369,9 @@ const passwordRules = {
     { required: true, message: '请输入用户名', trigger: 'blur' }
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度至少6位', trigger: 'blur' }
+    { validator: validatePasswordField, trigger: 'blur' }
   ],
-};
+}));
 
 // 可用标签
 const availableTags = ref(['重要', '个人', '工作', '常用', '临时']);
@@ -503,10 +518,10 @@ const editPassword = (password: PasswordEntry) => {
     site_name: password.site_name,
     site_url: password.site_url,
     username: password.username,
-    // 解锁会话内后端返回明文密码，预填以便直接保存；输入框为 password 类型（掩码显示）
-    password: password.password || '',
+    // 不预填明文：留空表示保持原密码，避免明文回显和被误判为“复用”
+    password: '',
     notes: password.notes || '',
-    tags: password.tags,
+    tags: [...password.tags],
     category: password.category,
     priority: password.priority,
   };
@@ -536,16 +551,41 @@ const deletePassword = async (password: PasswordEntry) => {
   }
 };
 
+const resetForm = () => {
+  editingPassword.value = null;
+  passwordForm.value = {
+    site_name: '',
+    site_url: '',
+    username: '',
+    password: '',
+    notes: '',
+    tags: [],
+    category: 'other',
+    priority: 3,
+  };
+};
+
+const openAddDialog = () => {
+  resetForm();
+  showAddDialog.value = true;
+};
+
 const savePassword = async () => {
   try {
-    await passwordFormRef.value?.validate();
+    const valid = await passwordFormRef.value?.validate().catch(() => false);
+    if (!valid) return;
     saving.value = true;
-    
+
+    // 新增时把表单全部字段一起提交，否则分类/优先级/备注/标签会丢
     const passwordData: NewPassword = {
       site_name: passwordForm.value.site_name,
       site_url: passwordForm.value.site_url,
       username: passwordForm.value.username,
       password: passwordForm.value.password,
+      notes: passwordForm.value.notes || undefined,
+      tags: passwordForm.value.tags,
+      category: passwordForm.value.category,
+      priority: passwordForm.value.priority,
     };
     
     if (editingPassword.value) {
@@ -570,7 +610,7 @@ const savePassword = async () => {
     }
     
     showAddDialog.value = false;
-    editingPassword.value = null;
+    resetForm();
     await loadPasswords();
   } catch (error) {
     console.error('保存密码失败:', error);
