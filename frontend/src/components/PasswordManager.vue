@@ -169,7 +169,7 @@
             <el-input
               v-model="passwordForm.password"
               type="password"
-              :placeholder="editingPassword ? '留空表示不修改密码' : '请输入密码'"
+              placeholder="请输入密码"
               show-password
               style="flex: 1;"
             />
@@ -344,20 +344,7 @@ const passwordForm = ref({
 // 表单验证规则
 const passwordFormRef = ref();
 
-// 编辑时密码留空代表“不修改”，因此只有新增才强制必填
-const validatePasswordField = (_rule: unknown, value: string, callback: (error?: Error) => void) => {
-  if (!editingPassword.value && !value) {
-    callback(new Error('请输入密码'));
-    return;
-  }
-  if (value && value.length < 6) {
-    callback(new Error('密码长度至少6位'));
-    return;
-  }
-  callback();
-};
-
-const passwordRules = computed(() => ({
+const passwordRules = {
   site_name: [
     { required: true, message: '请输入网站名称', trigger: 'blur' },
     { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
@@ -369,9 +356,10 @@ const passwordRules = computed(() => ({
     { required: true, message: '请输入用户名', trigger: 'blur' }
   ],
   password: [
-    { validator: validatePasswordField, trigger: 'blur' }
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, message: '密码长度至少6位', trigger: 'blur' }
   ],
-}));
+};
 
 // 可用标签
 const availableTags = ref(['重要', '个人', '工作', '常用', '临时']);
@@ -518,8 +506,9 @@ const editPassword = (password: PasswordEntry) => {
     site_name: password.site_name,
     site_url: password.site_url,
     username: password.username,
-    // 不预填明文：留空表示保持原密码，避免明文回显和被误判为“复用”
-    password: '',
+    // 预填原密码（输入框为掩码显示；弹窗 destroy-on-close，不会残留“显示密码”状态）。
+    // 原样提交时后端按“未修改”处理，不会触发防复用校验。
+    password: password.password || '',
     notes: password.notes || '',
     tags: [...password.tags],
     category: password.category,
