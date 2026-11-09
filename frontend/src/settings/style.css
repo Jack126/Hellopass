@@ -82,6 +82,11 @@ main {
   padding-right: 4px;
 }
 
+main[inert] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .pane {
   display: flex;
   flex-direction: column;

@@ -25,3 +25,13 @@ export async function request<T>(cmd: string, args?: Record<string, unknown>): P
   }
   return res.data as T;
 }
+
+export async function listen<T = unknown>(
+  event: string,
+  handler: (payload: T) => void
+): Promise<() => void> {
+  const tauri = (window as any).__TAURI__;
+  if (!tauri?.event?.listen) return () => {};
+  const unlisten = await tauri.event.listen(event, (e: { payload: T }) => handler(e.payload));
+  return typeof unlisten === 'function' ? unlisten : () => {};
+}

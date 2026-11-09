@@ -33,6 +33,9 @@ struct ClipboardGuard(Mutex<Option<String>>);
 
 const DEFAULT_WAKE_ACCEL: &str = "control+alt+space";
 const DEFAULT_LOCK_ACCEL: &str = "control+alt+l";
+// 插件用 id 作为注册表键，两个热键必须用不同 id，否则后注册的会覆盖前者。
+const WAKE_HOTKEY_ID: u32 = 1;
+const LOCK_HOTKEY_ID: u32 = 2;
 
 #[derive(Clone, serde::Serialize)]
 struct HotkeyInfo {
@@ -85,11 +88,12 @@ fn hotkey_display(sc: &Shortcut) -> String {
     parts.join(" + ")
 }
 
-fn parse_hotkey(accel: &str) -> Result<Shortcut, String> {
-    let sc: Shortcut = accel
+fn parse_hotkey(accel: &str, id: u32) -> Result<Shortcut, String> {
+    let mut sc: Shortcut = accel
         .trim()
         .parse()
         .map_err(|e| format!("无法识别的快捷键: {}", e))?;
+    sc.id = id;
     let label = key_label(&sc.key);
     let is_fkey =
         label.len() > 1 && label.starts_with('F') && label[1..].chars().all(|c| c.is_ascii_digit());
@@ -363,7 +367,8 @@ fn set_hotkey(
     if kind != "wake" && kind != "lock" {
         return ApiResponse::err_message("未知的热键类型");
     }
-    let new = match parse_hotkey(&accelerator) {
+    let hotkey_id = if kind == "lock" { LOCK_HOTKEY_ID } else { WAKE_HOTKEY_ID };
+    let new = match parse_hotkey(&accelerator, hotkey_id) {
         Ok(s) => s,
         Err(e) => return ApiResponse::err_message(e),
     };
@@ -422,6 +427,14 @@ fn show_launcher(app: &AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("launcher-shown", ());
+        // 后端兜底：锁定时再发一次锁定事件，前端即便没查到状态也会回到解锁界面
+        let locked = app
+            .try_state::<VaultState>()
+            .map(|s| !s.lock().unwrap().is_unlocked())
+            .unwrap_or(true);
+        if locked {
+            let _ = app.emit("vault-locked", ());
+        }
     }
 }
 
@@ -456,10 +469,11 @@ fn register_hotkey_with_fallback(
     saved: Option<String>,
     default_accel: &str,
     label: &str,
+    id: u32,
 ) -> Shortcut {
-    let default = parse_hotkey(default_accel).expect("默认热键必须可解析");
+    let default = parse_hotkey(default_accel, id).expect("默认热键必须可解析");
     let mut chosen = saved
-        .and_then(|s| parse_hotkey(&s).ok())
+        .and_then(|s| parse_hotkey(&s, id).ok())
         .unwrap_or_else(|| default.clone());
     if let Err(e) = app.global_shortcut().register(chosen.clone()) {
         crate::utils::log::error(
@@ -756,12 +770,14 @@ fn main() {
                 saved_wake,
                 DEFAULT_WAKE_ACCEL,
                 "唤醒",
+                WAKE_HOTKEY_ID,
             );
             let lock = register_hotkey_with_fallback(
                 &handle,
                 saved_lock,
                 DEFAULT_LOCK_ACCEL,
                 "锁定",
+                LOCK_HOTKEY_ID,
             );
             app.manage(HotkeyState(Mutex::new(HotkeyStateInner {
                 wake_display: hotkey_display(&wake),

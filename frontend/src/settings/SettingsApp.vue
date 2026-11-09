@@ -18,7 +18,7 @@
       保险库已锁定，请按 Ctrl+Alt+Space 唤出搜索窗解锁后再操作。
     </p>
 
-    <main>
+    <main :inert="!unlocked">
       <!-- 通用 -->
       <section v-if="tab === 'general'" class="pane">
         <div class="card">
@@ -172,9 +172,8 @@
       <!-- 关于 -->
       <section v-else class="pane">
         <div class="card">
-          <h2>SecurePass 1.0.0</h2>
-          <p class="muted">本地密码管理器：AES-256-GCM + PBKDF2-HMAC-SHA256（600,000 次）。</p>
-          <p class="muted">数据不会离开这台设备。</p>
+          <h2>SecurePass</h2>
+          <p class="muted">版本 1.0.0</p>
         </div>
       </section>
     </main>
@@ -183,7 +182,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
-import { request } from '../shared/ipc';
+import { listen, request } from '../shared/ipc';
 
 interface Integrity { sqlite_ok: boolean; db_size: number; baseline_ok: boolean; db_checksum: string }
 interface Stats { total_count: number }
@@ -504,13 +503,46 @@ async function loadAudit() {
   if (res) audit.value = res;
 }
 
+let unlistenLock: (() => void) | null = null;
+
+async function refreshLockState() {
+  try {
+    const s = await request<boolean>('vault_status');
+    if (s && !unlocked.value) {
+      unlocked.value = true;
+      setNotice('保险库已解锁');
+      await loadStats();
+      await loadAudit();
+    } else if (!s) {
+      applyLocked();
+    }
+  } catch {
+    applyLocked();
+  }
+}
+
+function applyLocked() {
+  if (!unlocked.value) return;
+  unlocked.value = false;
+  integrity.value = null;
+  stats.value = null;
+  expiring.value = [];
+  audit.value = [];
+  stopRecord(true);
+  setNotice('保险库已锁定，操作已禁用', 'bad');
+}
+
 onBeforeUnmount(() => {
   if (recordingKind.value) void request('end_hotkey_capture');
+  unlistenLock?.();
+  window.removeEventListener('focus', refreshLockState);
 });
 
 onMounted(async () => {
   autoLock.value = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
   await loadHotkey();
+  window.addEventListener('focus', refreshLockState);
+  unlistenLock = await listen('vault-locked', applyLocked);
   const s = await guard(() => request<boolean>('vault_status'));
   unlocked.value = !!s;
   if (unlocked.value) {

@@ -227,8 +227,31 @@ async function onShown() {
     await refresh();
     await goSearch();
   } catch (e) {
+    // 状态查询失败时按锁定处理，绝不展示缓存条目
+    resetSensitive();
+    items.value = [];
+    mode.value = 'unlock';
     error.value = (e as Error).message;
+    await api.suppressHide(true);
   }
+}
+
+/// 窗口重新可见/获得焦点时向后端确认一次，防止事件丢失后仍显示旧结果。
+async function ensureLockState() {
+  if (mode.value === 'edit' || mode.value === 'setup') return;
+  let unlocked = false;
+  try {
+    unlocked = await api.status();
+  } catch {
+    unlocked = false;
+  }
+  if (unlocked) return;
+  resetSensitive();
+  items.value = [];
+  mode.value = 'unlock';
+  await api.suppressHide(true);
+  await nextTick();
+  authInput.value?.focus();
 }
 
 async function doSetup() {
@@ -468,10 +491,15 @@ onMounted(async () => {
   await api.setSessionTimeout(minutes * 60).catch(() => {});
   window.addEventListener('keydown', onGlobalKey);
   window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('focus', () => void ensureLockState());
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void ensureLockState();
+  });
   unlisten.push(await listen('launcher-shown', () => void onShown()));
   unlisten.push(
     await listen('launcher-hidden', () => {
       revealed.value = null;
+      items.value = [];
       if (mode.value === 'detail') void goSearch();
     })
   );
