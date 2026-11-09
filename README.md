@@ -2,6 +2,13 @@
 
 跨平台密码管理器，采用 Vue 3 + Rust + Tauri 2 架构；密码使用 AES-256-GCM 加密，主密钥由 PBKDF2-HMAC-SHA256（600,000 次迭代）从主密码派生。
 
+## 🚀 使用方式
+
+- 启动后常驻托盘，不显示主窗口。
+- 按 `Ctrl+Alt+Space` 唤出搜索窗：输入即搜（支持拼音首字母，如 `wx` → 微信），`↑↓` 选择，`Enter` 复制密码并收起（30 秒后自动清剪贴板），`Ctrl+Enter` 复制用户名，`→` 查看详情，`Ctrl+N` 新建。
+- 托盘菜单：搜索 / 立即锁定 / 导入密码… / 导出密码… / 设置… / 退出。
+- 设置窗包含自动锁定时长、修改主密码、导入导出、备份恢复、完整性检查与审计日志。
+
 ## 📁 项目结构
 
 ```
@@ -25,14 +32,11 @@ passwd/
 │   └── utils/
 │       ├── app_state.rs          # CLI 用的简单状态
 │       └── log.rs                # 统一日志
-├── frontend/                     # Vue 3 + Element Plus
+├── frontend/                     # Vue 3（无 UI 框架）
 │   └── src/
-│       ├── App.vue               # 主密码弹窗、导入/导出、设置
-│       ├── components/
-│       │   ├── PasswordManager.vue
-│       │   └── PasswordList.vue
-│       ├── api/index.ts          # Tauri invoke 封装
-│       └── main.ts
+│       ├── launcher/             # 热键搜索弹窗：Launcher.vue / fuzzy.ts / ipc.ts
+│       ├── settings/             # 托盘打开的设置窗：SettingsApp.vue
+│       └── shared/ipc.ts         # 不依赖 UI 库的 invoke 封装
 ├── icons/                        # 应用/托盘图标（png/ico/icns）
 ├── assets/                       # 打包资源
 ├── capabilities/default.json     # Tauri 2 权限
@@ -56,7 +60,8 @@ passwd/
 - 数据库文件权限 0600
 
 ### 会话安全
-- 30 秒空闲超时自动锁定（可调 10 秒 ~ 5 分钟）
+- 默认不自动锁定（启动器形态），可在设置中改为 5/15/30 分钟
+- 手动锁定或退出时清空主密钥与界面明文
 - 5 次错误尝试锁定 30 分钟
 - 解锁/锁定/失败均写入审计日志
 

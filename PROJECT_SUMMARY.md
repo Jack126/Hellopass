@@ -24,13 +24,11 @@ passwd/
 │   │   ├── runtime.rs          # VaultRuntime（无 Tauri 依赖）
 │   │   └── mod.rs
 │   └── utils/log.rs            # 统一日志
-├── frontend/                   # Vue 3 + Element Plus
+├── frontend/                   # Vue 3（无 UI 框架）
 │   └── src/
-│       ├── App.vue             # 主密码/导入导出/备份/设置/安全概览
-│       ├── components/PasswordManager.vue
-│       ├── components/PasswordList.vue
-│       ├── api/index.ts        # Tauri invoke 封装
-│       └── dev-mock.ts         # 仅开发预览用 mock
+│       ├── launcher/           # 热键搜索弹窗（Launcher.vue / fuzzy.ts）
+│       ├── settings/           # 托盘打开的设置窗
+│       └── shared/ipc.ts       # invoke 封装
 ├── icons/  assets/  capabilities/
 ├── tauri.conf.json             # Tauri 2 配置
 └── Cargo.toml
@@ -39,14 +37,16 @@ passwd/
 ## 已完成
 - 加密与主密码：AES-256-GCM；PBKDF2 600k；salt 持久化；改密 rekey
 - 数据库：SQLite；CRUD；审计；密码历史（5 条防复用）；过期（90 天）；schema 迁移与版本
-- 会话安全：30 秒空闲超时（可调 10~300 秒）；5 次失败锁定 30 分钟
+- 会话安全：默认不自动锁（设置窗可改 5/15/30 分钟）；5 次失败锁定 30 分钟
 - 审计：操作落库 + 解锁时清理 90 天前记录
 - 导入导出：加密导出（.spb，独立导出密码）；明文导出命令已移除；导入去重统计
 - 会话锁定：前端空闲计时 + 手动锁定，超时卸载界面并清空明文；锁定时长可设置并同步后端
 - 备份：自包含加密备份包，可跨安装恢复
 - 完整性：SQLite integrity_check + DB/配置 SHA-256 + 锁定基线比对
 - Tauri 2：VaultRuntime + Mutex；命令；窗口/托盘；v2 配置 + 图标 + capabilities
-- 前端：设置/解锁、列表、增删改、搜索、导入导出、备份、安全概览、密码生成器
+- 启动器：Ctrl+Alt+Space 唤出、拼音首字母+子序列模糊搜索、回车复制并 30 秒清剪贴板
+- 托盘：搜索/锁定/导入/导出/设置/退出；导入导出走原生文件框，口令在弹窗内收集
+- 前端：独立设置窗（通用/导入导出/安全/审计/关于），不再打包 Element Plus
 - 工程：AppError 统一错误（运行时边界已采用）；24 个单测/集成/安全测试通过；securepass bin 0 警告
 - CI：`.github/workflows/ci.yml` 三平台矩阵（backend tests / frontend build / tauri build）
 
@@ -57,4 +57,4 @@ passwd/
 ## 校验方式
 - 后端：`cargo test --bin securepass_cli --no-default-features`
 - 前端：`cd frontend && npm run build`
-- 预览：`cd frontend && npm run dev` 后打开 `/preview.html`
+- 预览：`cd frontend && npm run dev`（index.html 为启动器，setting.html 为设置窗）
