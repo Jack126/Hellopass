@@ -163,12 +163,16 @@
         </el-form-item>
         
         <el-form-item label="密码" prop="password">
-          <el-input
-            v-model="passwordForm.password"
-            type="password"
-            placeholder="请输入密码"
-            show-password
-          />
+          <div style="display: flex; gap: 8px; width: 100%;">
+            <el-input
+              v-model="passwordForm.password"
+              type="password"
+              placeholder="请输入密码"
+              show-password
+              style="flex: 1;"
+            />
+            <el-button @click="generatePassword">生成</el-button>
+          </div>
           <div class="password-strength">
             <el-progress 
               :percentage="passwordStrength" 
@@ -265,7 +269,7 @@
             </el-input>
           </el-descriptions-item>
           <el-descriptions-item label="备注">
-            {{ selectedPassword.encrypted_notes || '无' }}
+            {{ selectedPassword.notes || '无' }}
           </el-descriptions-item>
           <el-descriptions-item label="标签">
             <el-tag
@@ -421,12 +425,48 @@ const passwordStrengthClass = computed(() => {
   return 'strong';
 });
 
+const randInt = (max: number) => {
+  const limit = Math.floor(0xffffffff / max) * max;
+  const buf = new Uint32Array(1);
+  let x = 0;
+  do {
+    crypto.getRandomValues(buf);
+    x = buf[0];
+  } while (x >= limit);
+  return x % max;
+};
+
+const generatePassword = () => {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const special = '!@#$%^&*()-_=+';
+  const all = upper + lower + digits + special;
+  const chars: string[] = [
+    upper[randInt(upper.length)],
+    lower[randInt(lower.length)],
+    digits[randInt(digits.length)],
+    special[randInt(special.length)],
+  ];
+  while (chars.length < 16) {
+    chars.push(all[randInt(all.length)]);
+  }
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randInt(i + 1);
+    const t = chars[i];
+    chars[i] = chars[j];
+    chars[j] = t;
+  }
+  passwordForm.value.password = chars.join('');
+  notificationApi.showNotification('已生成 16 位强密码', 'success');
+};
+
 // 方法
 const loadPasswords = async () => {
   loading.value = true;
   try {
     const response = await passwordApi.getPasswords();
-    passwords.value = response.data.data || [];
+    passwords.value = response || [];
   } catch (error) {
     console.error('加载密码失败:', error);
     notificationApi.showNotification('加载密码失败', 'error');
@@ -441,15 +481,15 @@ const handleSearch = () => {
 
 const selectPassword = async (password: PasswordEntry) => {
   selectedPassword.value = password;
-  // 这里应该调用API解密密码
-  decryptedPassword.value = '解密后的密码'; // 实际应用中应该调用解密API
+  // 后端在解锁会话内直接返回明文 password / notes
+  decryptedPassword.value = password.password || '';
   showDetailDialog.value = true;
 };
 
 const copyPassword = async (password: PasswordEntry) => {
   try {
-    // 这里应该调用API解密密码
-    const decryptedPassword = '解密后的密码'; // 实际应用中应该调用解密API
+    // 后端在解锁会话内直接返回明文 password
+    const decryptedPassword = password.password || '';
     await copyToClipboard(decryptedPassword);
     notificationApi.showNotification('密码已复制到剪贴板', 'success');
   } catch (error) {
@@ -463,8 +503,9 @@ const editPassword = (password: PasswordEntry) => {
     site_name: password.site_name,
     site_url: password.site_url,
     username: password.username,
-    password: '', // 出于安全考虑，不显示原密码
-    notes: password.encrypted_notes || '',
+    // 解锁会话内后端返回明文密码，预填以便直接保存；输入框为 password 类型（掩码显示）
+    password: password.password || '',
+    notes: password.notes || '',
     tags: password.tags,
     category: password.category,
     priority: password.priority,

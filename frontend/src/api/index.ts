@@ -1,93 +1,133 @@
-// SecurePass API 客户端
-import axios from 'axios';
+// SecurePass 前端 API 客户端（Tauri 集成）
+//
+// 通过 window.__TAURI__.invoke 调用 Rust 后端命令（tauri.conf.json 已开启
+// withGlobalTauri，因此无需额外安装 @tauri-apps/api 即可使用全局 API）。
+//
+// 约定：每个 Rust 命令返回 ApiResponse<T>；本客户端将其规范化为
+// 「成功则返回 data，失败则 reject」的 Promise，便于上层 try/catch 处理。
 
-const API_BASE_URL = process.env.NODE_ENV === 'development' 
-  ? 'http://localhost:3000/api' 
-  : '/api';
+const invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+  const tauri = (window as any).__TAURI__;
+  // Tauri v2 的全局对象是 { core: { invoke }, ... }；兼容 v1 的 { invoke }
+  const invokeFn = tauri?.core?.invoke ?? tauri?.invoke;
+  if (!invokeFn) {
+    return Promise.reject(new Error('Tauri 运行时不可用：请在桌面应用（tauri dev / tauri build）中运行'));
+  }
+  return invokeFn(cmd, args) as Promise<T>;
+};
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  timestamp: string;
+}
 
-// 密码管理 API
+async function request<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const res = await invoke<ApiResponse<T>>(cmd, args);
+  if (!res.success) {
+    throw new Error(res.error || '操作失败');
+  }
+  return res.data as T;
+}
+
+// ===================== 密码管理 API =====================
 export const passwordApi = {
-  // 获取所有密码
-  getPasswords: () => api.get<PasswordEntry[]>('/passwords'),
-  
+  // 获取所有密码（明文仅在解锁会话内由后端返回）
+  getPasswords: () => request<PasswordEntry[]>('get_passwords'),
   // 添加密码
-  addPassword: (password: NewPassword) => api.post<PasswordEntry>('/passwords', password),
-  
-  // 更新密码
-  updatePassword: (id: number, password: UpdatePassword) => api.put<PasswordEntry>(`/passwords/${id}`, password),
-  
+  addPassword: (password: NewPassword) =>
+    request<PasswordEntry>('add_password', { password }),
+  // 更新密码（id 合并进 body）
+  updatePassword: (id: number, password: UpdatePassword) =>
+    request<PasswordEntry>('update_password', { password: { id, ...password } }),
   // 删除密码
-  deletePassword: (id: number) => api.delete(`/passwords/${id}`),
-  
+  deletePassword: (id: number) => request<undefined>('delete_password', { id }),
   // 搜索密码
-  searchPasswords: (query: string) => api.get<PasswordEntry[]>(`/passwords/search?q=${query}`),
+  searchPasswords: (query: string) =>
+    request<PasswordEntry[]>('search_passwords', { query: { query } }),
+  // 密码策略与安全
+  getPasswordPolicy: () => request<PasswordPolicy>('get_password_policy'),
+  getExpiringPasswords: (withinDays = 30) =>
+    request<PasswordExpiryInfo[]>('get_expiring_passwords', { withinDays }),
+  checkPasswordStrength: (password: string) =>
+    request<PasswordStrengthResult>('check_password_strength', { password }),
+  getAuditLogs: () => request<AuditLogEntry[]>('get_audit_logs'),
+  checkIntegrity: () => request<IntegrityReport>('check_integrity'),
 };
 
-// 认证 API
+// ===================== 认证 / 保险库 API =====================
 export const authApi = {
-  // 登录
-  login: (credentials: LoginRequest) => api.post<LoginResponse>('/auth/login', credentials),
-  
-  // 登出
-  logout: () => api.post('/auth/logout'),
-  
-  // 修改密码
-  changePassword: (request: ChangePasswordRequest) => api.post('/auth/change-password', request),
-  
-  // 验证密码强度
-  validatePassword: (password: string) => api.post('/auth/validate-password', { password }),
-};
-
-// 导入导出 API
-export const importExportApi = {
-  // 导出密码
-  exportPasswords: (format: 'json' | 'csv' = 'json') => api.get(`/export/passwords?format=${format}`, {
-    responseType: 'blob',
-  }),
-  
-  // 导入密码
-  importPasswords: (file: File, format: 'json' | 'csv' = 'json') => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('format', format);
-    return api.post('/import/passwords', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
+  // 是否已设置主密码
+  isSet: () => request<boolean>('is_master_password_set'),
+  // 首次设置主密码
+  setup: (masterPassword: string) =>
+    request<undefined>('setup_master_password', { masterPassword }),
+  // 解锁保险库
+  login: (masterPassword: string) =>
+    request<undefined>('unlock', { masterPassword }),
+  // 锁定保险库
+  logout: () => request<undefined>('lock'),
+  // 修改主密码
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<undefined>('change_master_password', {
+      oldPassword,
+      newPassword,
+    }),
+  // 密码强度校验（调用后端策略评估）
+  validatePassword: async (password: string): Promise<ApiResponse<PasswordStrengthResult>> => {
+    try {
+      const detail = await request<PasswordStrengthResult>('check_password_strength', { password });
+      return { success: true, data: detail, timestamp: new Date().toISOString() };
+    } catch (e) {
+      return { success: false, error: (e as Error).message, timestamp: new Date().toISOString() };
+    }
   },
-  
-  // 创建备份
-  createBackup: () => api.post('/backup/create'),
-  
-  // 恢复备份
-  restoreBackup: (backupId: string) => api.post(`/backup/restore/${backupId}`),
 };
 
-// 通知 API
+// ===================== 导入导出 API =====================
+export const importExportApi = {
+  // 导出全部密码：json -> export_passwords，csv -> export_passwords_csv
+  exportPasswords: (format: 'json' | 'csv' = 'json') =>
+    format === 'csv'
+      ? request<string>('export_passwords_csv')
+      : request<string>('export_passwords'),
+  // 按 id 集合导出（format: json/csv）
+  exportSelected: (ids: number[], format: 'json' | 'csv' = 'json') =>
+    request<string>('export_selected', { ids, format }),
+  // 导入密码：后端自动识别 JSON/CSV，返回导入统计
+  importPasswords: (data: string) =>
+    request<ImportResult>('import_passwords', { data }),
+  // 创建加密备份：返回自包含备份包（JSON 字符串）
+  exportBackup: () => request<string>('export_backup'),
+  exportEncrypted: (exportPassword: string) =>
+    request<string>('export_encrypted', { exportPassword }),
+  importEncrypted: (data: string, exportPassword: string) =>
+    request<ImportResult>('import_encrypted', { data, exportPassword }),
+  // 从加密备份恢复：data 为备份包内容，masterPassword 为创建备份时的主密码
+  restoreBackup: (data: string, masterPassword: string) =>
+    request<ImportResult>('restore_backup', { data, masterPassword }),
+};
+
+// ===================== 通知 API =====================
 export const notificationApi = {
   showNotification: (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
-    // 在实际应用中，这里会调用系统通知API
     console.log(`[${type.toUpperCase()}] ${message}`);
   },
 };
 
-// 数据类型定义
+// ===================== 数据类型定义 =====================
 export interface PasswordEntry {
-  id: number;
+  id?: number;
   site_name: string;
   site_url: string;
   username: string;
   encrypted_password: string;
   encrypted_notes?: string;
+  /** 明文密码（仅在解锁会话内由后端解密返回） */
+  password?: string;
+  /** 明文备注 */
+  notes?: string;
   created_at: string;
   updated_at: string;
   last_accessed?: string;
@@ -121,6 +161,67 @@ export interface UpdatePassword {
   priority?: number;
 }
 
+export interface SearchQuery {
+  query: string;
+  category?: string;
+  tags?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface PasswordStats {
+  total_count: number;
+  category_counts: Record<string, number>;
+  tag_counts: Record<string, number>;
+  recent_access_count: number;
+}
+
+export interface ImportResult {
+  imported_count: number;
+  skipped_count: number;
+  updated_count: number;
+  error_count: number;
+  errors: string[];
+}
+
+export interface PasswordPolicy {
+  max_age_days: number;
+  history_limit: number;
+}
+
+export interface PasswordExpiryInfo {
+  id?: number;
+  site_name: string;
+  days_until_expiry: number;
+  expired: boolean;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  timestamp: string;
+  action: string;
+  resource_type?: string;
+  resource_id?: string;
+  details?: string;
+  success: boolean;
+  error_message?: string;
+}
+
+export interface PasswordStrengthResult {
+  is_valid: boolean;
+  score: number;
+  feedback: string[];
+  suggestions: string[];
+}
+
+export interface IntegrityReport {
+  sqlite_ok: boolean;
+  db_checksum: string;
+  db_size: number;
+  config_checksum?: string;
+  baseline_ok: boolean;
+}
+
 export interface LoginRequest {
   master_password: string;
   remember_me?: boolean;
@@ -137,58 +238,12 @@ export interface ChangePasswordRequest {
   new_password: string;
 }
 
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  timestamp: string;
-}
-
-// 错误处理
-export const handleApiError = (error: any) => {
-  if (error.response) {
-    // 服务器响应了，但状态码不在 2xx 范围内
-    console.error('API Error:', error.response.data);
-    notificationApi.showNotification(
-      error.response.data.error || '请求失败',
-      'error'
-    );
-  } else if (error.request) {
-    // 请求已发出，但没有收到响应
-    console.error('Network Error:', error.request);
-    notificationApi.showNotification('网络连接失败', 'error');
-  } else {
-    // 在设置请求时发生错误
-    console.error('Request Error:', error.message);
-    notificationApi.showNotification('请求设置失败', 'error');
-  }
+// ===================== 错误处理 =====================
+export const handleApiError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('API Error:', message);
+  notificationApi.showNotification(message || '请求失败', 'error');
   throw error;
 };
 
-// 请求拦截器
-api.interceptors.request.use(
-  (config) => {
-    // 在这里可以添加认证token等
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
-
-// 响应拦截器
-api.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  (error) => {
-    handleApiError(error);
-    return Promise.reject(error);
-  }
-);
-
-export default api;
+export default { passwordApi, authApi, importExportApi, notificationApi };

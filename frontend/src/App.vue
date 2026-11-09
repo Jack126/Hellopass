@@ -12,7 +12,7 @@
             <div class="header-actions">
               <el-button 
                 type="primary" 
-                @click="showExportDialog = true"
+                @click="openExportDialog"
                 :icon="Download"
               >
                 导出密码
@@ -30,6 +30,14 @@
                 :icon="DocumentCopy"
               >
                 备份恢复
+              </el-button>
+              <el-button 
+                type="primary" 
+                plain
+                @click="openSecurityOverview"
+                :icon="Lock"
+              >
+                安全概览
               </el-button>
               <el-button 
                 type="warning" 
@@ -91,27 +99,106 @@
       </div>
     </el-config-provider>
 
+    <!-- 安全概览对话框 -->
+    <el-dialog
+      v-model="showSecurityDialog"
+      title="安全概览"
+      width="640px"
+    >
+      <div v-loading="securityLoading" class="security-overview">
+        <el-descriptions :column="2" border title="密码策略">
+          <el-descriptions-item label="最长使用天数">
+            {{ passwordPolicy ? passwordPolicy.max_age_days : '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="历史密码保留">
+            {{ passwordPolicy ? passwordPolicy.history_limit : '-' }} 条
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <div class="integrity-row">
+          <el-button size="small" @click="runIntegrityCheck" :loading="integrityLoading">运行完整性检查</el-button>
+          <span v-if="integrityReport" style="margin-left: 12px;">
+            <el-tag :type="integrityReport.sqlite_ok ? 'success' : 'danger'" size="small">
+              SQLite {{ integrityReport.sqlite_ok ? '正常' : '异常' }}
+            </el-tag>
+            <el-tag :type="integrityReport.baseline_ok ? 'success' : 'warning'" size="small" style="margin-left: 8px;">
+              基线 {{ integrityReport.baseline_ok ? '一致' : '不一致' }}
+            </el-tag>
+            <span style="margin-left: 8px;">
+              DB SHA-256：{{ integrityReport.db_checksum.slice(0, 16) }}…（{{ integrityReport.db_size }} 字节）
+            </span>
+          </span>
+        </div>
+
+        <h4 class="security-title">即将 / 已经过期（{{ expiringPasswords.length }}）</h4>
+        <el-table :data="expiringPasswords" size="small" max-height="200" empty-text="没有即将过期的密码">
+          <el-table-column prop="site_name" label="站点" />
+          <el-table-column label="状态" width="140">
+            <template #default="scope">
+              <el-tag :type="scope.row.expired ? 'danger' : 'warning'" size="small">
+                {{ scope.row.expired ? '已过期' : '剩 ' + scope.row.days_until_expiry + ' 天' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <h4 class="security-title">最近审计日志（{{ auditLogs.length }}）</h4>
+        <el-table :data="auditLogs" size="small" max-height="220" empty-text="暂无审计记录">
+          <el-table-column prop="timestamp" label="时间" width="210" />
+          <el-table-column prop="action" label="操作" width="170" />
+          <el-table-column label="结果" width="90">
+            <template #default="scope">
+              <el-tag :type="scope.row.success ? 'success' : 'danger'" size="small">
+                {{ scope.row.success ? '成功' : '失败' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="showSecurityDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 导出对话框 -->
     <el-dialog
       v-model="showExportDialog"
       title="导出密码"
-      width="400px"
+      width="560px"
     >
-      <div class="export-options">
-        <el-radio-group v-model="exportFormat">
-          <el-radio label="json">JSON 格式</el-radio>
-          <el-radio label="csv">CSV 格式</el-radio>
-        </el-radio-group>
-      </div>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="导出为加密文件（AES-256-GCM）"
+        description="需设置一个「导出密码」。文件只有用该密码才能解密，与保险库主密码无关，可安全用于跨设备 / 外部分发。"
+      />
+      <el-form label-width="90px" style="margin-top: 16px;">
+        <el-form-item label="导出密码">
+          <el-input
+            v-model="exportPassword"
+            type="password"
+            show-password
+            placeholder="设置导出密码（导入时需输入相同密码）"
+          />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input
+            v-model="exportPasswordConfirm"
+            type="password"
+            show-password
+            placeholder="再次输入导出密码"
+          />
+        </el-form-item>
+      </el-form>
       <div class="export-info">
-        <p>导出格式：{{ exportFormat === 'json' ? 'JSON' : 'CSV' }}</p>
-        <p>包含内容：所有密码条目</p>
-        <p>注意：导出的文件包含加密后的密码，请妥善保管</p>
+        <p>导出文件：securepass-export-*.spb（加密包，非明文）</p>
+        <p>请牢记导出密码，遗忘后将无法解密该备份。</p>
       </div>
       <template #footer>
         <el-button @click="showExportDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleExport" :loading="exporting">
-          导出
+        <el-button type="primary" @click="handleEncryptedExport" :loading="exporting">
+          加密导出
         </el-button>
       </template>
     </el-dialog>
@@ -122,42 +209,36 @@
       title="导入密码"
       width="400px"
     >
-      <div class="import-options">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="导入加密备份（.spb）"
+        description="选择由本程序加密导出的 .spb 文件，导入时会要求输入当时的「导出密码」进行解密，随后按本机主密码重新加密入库。"
+      />
+      <div class="import-options" style="margin-top: 16px;">
         <el-form :model="importForm" label-width="80px">
-          <el-form-item label="文件格式">
-            <el-radio-group v-model="importForm.format">
-              <el-radio label="json">JSON 格式</el-radio>
-              <el-radio label="csv">CSV 格式</el-radio>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item label="导入文件">
+          <el-form-item label="备份文件">
             <el-upload
               ref="uploadRef"
               :auto-upload="false"
               :on-change="handleFileChange"
               :limit="1"
-              accept=".json,.csv"
+              accept=".spb"
             >
-              <el-button type="primary">选择文件</el-button>
+              <el-button type="primary">选择 .spb 文件</el-button>
               <template #tip>
                 <div class="el-upload__tip">
-                  只能上传 JSON 或 CSV 文件，且不超过 10MB
+                  仅支持本程序加密导出的 .spb 文件
                 </div>
               </template>
             </el-upload>
-          </el-form-item>
-          <el-form-item label="处理方式">
-            <el-radio-group v-model="importForm.duplicateHandling">
-              <el-radio label="skip">跳过重复</el-radio>
-              <el-radio label="update">更新重复</el-radio>
-              <el-radio label="rename">重命名重复</el-radio>
-            </el-radio-group>
           </el-form-item>
         </el-form>
       </div>
       <template #footer>
         <el-button @click="showImportDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleImport" :loading="importing">
+        <el-button type="primary" @click="handleEncryptedImport" :loading="importing">
           导入
         </el-button>
       </template>
@@ -211,6 +292,13 @@
               <p>⚠️ 恢复将覆盖现有数据</p>
             </div>
           </el-card>
+          <input
+            ref="backupFileInput"
+            type="file"
+            accept=".json,application/json"
+            style="display: none"
+            @change="handleBackupFile"
+          />
         </el-col>
       </el-row>
     </el-dialog>
@@ -291,19 +379,79 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 主密码设置 / 解锁对话框 -->
+    <el-dialog
+      v-model="showAuth"
+      :title="authMode === 'setup' ? '设置主密码' : '解锁保险库'"
+      width="420px"
+      :close-on-click-modal="false"
+      :show-close="false"
+    >
+      <el-form label-width="90px" @submit.prevent>
+        <el-form-item :label="authMode === 'setup' ? '新主密码' : '主密码'">
+          <el-input
+            v-model="masterPassword"
+            type="password"
+            show-password
+            placeholder="至少12位，含大小写字母、数字与符号"
+            @keyup.enter="submitAuth"
+          />
+          <div v-if="authMode === 'setup' && masterPassword" class="password-strength">
+            <el-progress
+              :percentage="masterPasswordStrength"
+              :color="masterPasswordStrengthColor"
+              :show-text="false"
+            />
+            <span :class="['strength-text', masterPasswordStrengthClass]">
+              强度：{{ masterPasswordStrengthText }}
+            </span>
+            <ul class="strength-rules">
+              <li
+                v-for="rule in masterPasswordRules"
+                :key="rule.label"
+                :class="rule.ok ? 'ok' : 'bad'"
+              >
+                {{ rule.ok ? '✓' : '✗' }} {{ rule.label }}
+              </li>
+            </ul>
+          </div>
+        </el-form-item>
+        <el-alert
+          v-if="authError"
+          :title="authError"
+          type="error"
+          :closable="false"
+          show-icon
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="showAuth = false">稍后</el-button>
+        <el-button type="primary" @click="submitAuth" :loading="authLoading">
+          {{ authMode === 'setup' ? '设置并进入' : '解锁' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs';
-import { Download, Upload, DocumentCopy, Setting } from '@element-plus/icons-vue';
+import { Download, Upload, DocumentCopy, Setting, Lock } from '@element-plus/icons-vue';
 import PasswordManager from './components/PasswordManager.vue';
-import { notificationApi } from './api';
+import { authApi, importExportApi, notificationApi, passwordApi, type PasswordEntry, type PasswordPolicy, type PasswordExpiryInfo, type AuditLogEntry, type IntegrityReport } from './api';
 
 // 响应式数据
 const passwordsLoaded = ref(false);
+
+// 主密码设置 / 解锁弹窗状态
+const showAuth = ref(false);
+const authMode = ref<'setup' | 'unlock'>('unlock');
+const masterPassword = ref('');
+const authLoading = ref(false);
+const authError = ref('');
 const showExportDialog = ref(false);
 const showImportDialog = ref(false);
 const showBackupDialog = ref(false);
@@ -312,8 +460,21 @@ const exporting = ref(false);
 const importing = ref(false);
 const savingSettings = ref(false);
 
+// 安全概览
+const showSecurityDialog = ref(false);
+const securityLoading = ref(false);
+const passwordPolicy = ref<PasswordPolicy | null>(null);
+const expiringPasswords = ref<PasswordExpiryInfo[]>([]);
+const auditLogs = ref<AuditLogEntry[]>([]);
+const integrityReport = ref<IntegrityReport | null>(null);
+const integrityLoading = ref(false);
+
 // 导出设置
 const exportFormat = ref('json');
+const exportCandidates = ref<PasswordEntry[]>([]);
+const exportSelectedIds = ref<number[]>([]);
+const exportPassword = ref('');
+const exportPasswordConfirm = ref('');
 
 // 导入设置
 const importForm = ref({
@@ -372,9 +533,48 @@ const settingsPasswordStrengthClass = computed(() => {
   return 'strong';
 });
 
+// 设置主密码对话框：实时强度反馈与需求清单（与后端 MasterPasswordManager 校验规则一致）
+const masterPasswordRules = computed(() => {
+  const p = masterPassword.value;
+  return [
+    { label: '至少 12 个字符', ok: p.length >= 12 },
+    { label: '包含大写字母 (A-Z)', ok: /[A-Z]/.test(p) },
+    { label: '包含小写字母 (a-z)', ok: /[a-z]/.test(p) },
+    { label: '包含数字 (0-9)', ok: /[0-9]/.test(p) },
+    { label: '包含特殊符号 (!@#$…)', ok: /[^a-zA-Z0-9]/.test(p) },
+  ];
+});
+
+const masterPasswordStrength = computed(() => {
+  const total = masterPasswordRules.value.length;
+  const ok = masterPasswordRules.value.filter((r) => r.ok).length;
+  return Math.round((ok / total) * 100);
+});
+
+const masterPasswordStrengthColor = computed(() => {
+  const s = masterPasswordStrength.value;
+  if (s < 40) return '#f56c6c';
+  if (s < 100) return '#e6a23c';
+  return '#67c23a';
+});
+
+const masterPasswordStrengthText = computed(() => {
+  const s = masterPasswordStrength.value;
+  if (s < 40) return '弱';
+  if (s < 100) return '中';
+  return '强';
+});
+
+const masterPasswordStrengthClass = computed(() => {
+  const s = masterPasswordStrength.value;
+  if (s < 40) return 'weak';
+  if (s < 100) return 'medium';
+  return 'strong';
+});
+
 // 方法
 const startUsing = () => {
-  passwordsLoaded.value = true;
+  showAuth.value = true;
   notificationApi.showNotification('欢迎使用 SecurePass！', 'success');
 };
 
@@ -382,14 +582,113 @@ const showTutorial = () => {
   notificationApi.showNotification('使用教程功能开发中...', 'info');
 };
 
+const openSecurityOverview = async () => {
+  showSecurityDialog.value = true;
+  securityLoading.value = true;
+  try {
+    const [policy, expiring, logs] = await Promise.all([
+      passwordApi.getPasswordPolicy(),
+      passwordApi.getExpiringPasswords(30),
+      passwordApi.getAuditLogs(),
+    ]);
+    passwordPolicy.value = policy;
+    expiringPasswords.value = expiring;
+    auditLogs.value = logs;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    notificationApi.showNotification('加载安全概览失败：' + msg, 'error');
+  } finally {
+    securityLoading.value = false;
+  }
+};
+
+const runIntegrityCheck = async () => {
+  integrityLoading.value = true;
+  try {
+    integrityReport.value = await passwordApi.checkIntegrity();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    notificationApi.showNotification('完整性检查失败：' + msg, 'error');
+  } finally {
+    integrityLoading.value = false;
+  }
+};
+
+const openExportDialog = async () => {
+  exportSelectedIds.value = [];
+  exportCandidates.value = [];
+  showExportDialog.value = true;
+  try {
+    exportCandidates.value = await passwordApi.getPasswords();
+  } catch (e) {
+    // 加载失败时仍允许全量导出
+  }
+};
+
+const selectAllExports = () => {
+  exportSelectedIds.value = exportCandidates.value
+    .map((p) => p.id)
+    .filter((id): id is number => typeof id === 'number');
+};
+
+const handleEncryptedExport = async () => {
+  const pwd = exportPassword.value;
+  const confirm = exportPasswordConfirm.value;
+  if (!pwd || pwd.length < 8) {
+    notificationApi.showNotification('导出密码至少 8 位', 'warning');
+    return;
+  }
+  if (pwd !== confirm) {
+    notificationApi.showNotification('两次输入的导出密码不一致', 'warning');
+    return;
+  }
+  exporting.value = true;
+  try {
+    const content = await importExportApi.exportEncrypted(pwd);
+    const blob = new Blob([content], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'securepass-export-' + Date.now() + '.spb';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notificationApi.showNotification('加密导出成功', 'success');
+    showExportDialog.value = false;
+    exportPassword.value = '';
+    exportPasswordConfirm.value = '';
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification('加密导出失败：' + msg, 'error');
+  } finally {
+    exporting.value = false;
+  }
+};
+
 const handleExport = async () => {
   exporting.value = true;
   try {
-    // 这里应该调用实际的导出API
-    notificationApi.showNotification('导出功能开发中...', 'info');
+    const format = exportFormat.value === 'csv' ? 'csv' : 'json';
+    const content = exportSelectedIds.value.length > 0
+      ? await importExportApi.exportSelected(exportSelectedIds.value, format)
+      : await importExportApi.exportPasswords(format);
+    const blob = new Blob([content], {
+      type: format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `securepass-export-${Date.now()}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notificationApi.showNotification('导出成功', 'success');
     showExportDialog.value = false;
   } catch (error) {
-    notificationApi.showNotification('导出失败', 'error');
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification(`导出失败：${msg}`, 'error');
   } finally {
     exporting.value = false;
   }
@@ -399,19 +698,63 @@ const handleFileChange = (file: any) => {
   importForm.value.file = file.raw;
 };
 
+const handleEncryptedImport = async () => {
+  if (!importForm.value.file) {
+    notificationApi.showNotification('请选择要导入的 .spb 文件', 'warning');
+    return;
+  }
+  const text = await importForm.value.file.text();
+  let pwd = '';
+  try {
+    const res = await ElMessageBox.prompt('请输入该备份的导出密码', '解密备份', {
+      inputType: 'password',
+      confirmButtonText: '导入',
+      cancelButtonText: '取消',
+    });
+    pwd = res.value;
+  } catch (e) {
+    return;
+  }
+  if (!pwd) {
+    notificationApi.showNotification('导出密码不能为空', 'warning');
+    return;
+  }
+  importing.value = true;
+  try {
+    const result = await importExportApi.importEncrypted(text, pwd);
+    notificationApi.showNotification(
+      '导入完成：新增 ' + result.imported_count + '，跳过 ' + result.skipped_count + '，失败 ' + result.error_count,
+      result.error_count > 0 ? 'warning' : 'success'
+    );
+    importForm.value.file = null;
+    showImportDialog.value = false;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification('导入失败：' + msg, 'error');
+  } finally {
+    importing.value = false;
+  }
+};
+
 const handleImport = async () => {
   if (!importForm.value.file) {
     notificationApi.showNotification('请选择要导入的文件', 'warning');
     return;
   }
-  
+
   importing.value = true;
   try {
-    // 这里应该调用实际的导入API
-    notificationApi.showNotification('导入功能开发中...', 'info');
+    const text = await importForm.value.file.text();
+    const result = await importExportApi.importPasswords(text);
+    notificationApi.showNotification(
+      `导入完成：新增 ${result.imported_count}，跳过 ${result.skipped_count}，失败 ${result.error_count}`,
+      result.error_count > 0 ? 'warning' : 'success'
+    );
+    importForm.value.file = null;
     showImportDialog.value = false;
   } catch (error) {
-    notificationApi.showNotification('导入失败', 'error');
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification(`导入失败：${msg}`, 'error');
   } finally {
     importing.value = false;
   }
@@ -419,16 +762,57 @@ const handleImport = async () => {
 
 const createBackup = async () => {
   try {
-    // 这里应该调用实际的备份API
-    notificationApi.showNotification('备份功能开发中...', 'info');
+    const content = await importExportApi.exportBackup();
+    const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'securepass-backup-' + Date.now() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notificationApi.showNotification('备份已创建（加密文件）', 'success');
   } catch (error) {
-    notificationApi.showNotification('创建备份失败', 'error');
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification('创建备份失败：' + msg, 'error');
   }
 };
 
 const showBackupFileSelect = () => {
   if (backupFileInput.value) {
     backupFileInput.value.click();
+  }
+};
+
+const handleBackupFile = async (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    const data = await file.text();
+    const { value } = await ElMessageBox.prompt('请输入创建该备份时使用的主密码', '恢复备份', {
+      confirmButtonText: '恢复',
+      cancelButtonText: '取消',
+      inputType: 'password',
+    });
+    if (!value) {
+      notificationApi.showNotification('请输入备份主密码', 'warning');
+      return;
+    }
+    const result = await importExportApi.restoreBackup(data, value);
+    notificationApi.showNotification(
+      '恢复完成：新增 ' + result.imported_count + '，跳过 ' + result.skipped_count + '，失败 ' + result.error_count,
+      result.error_count > 0 ? 'warning' : 'success'
+    );
+    showBackupDialog.value = false;
+    passwordsLoaded.value = true;
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return;
+    const msg = error instanceof Error ? error.message : String(error);
+    notificationApi.showNotification('恢复备份失败：' + msg, 'error');
+  } finally {
+    input.value = '';
   }
 };
 
@@ -446,11 +830,49 @@ const saveSettings = async () => {
 };
 
 // 生命周期
-onMounted(() => {
-  // 检查是否已经设置了主密码
-  // 如果没有，可以跳转到设置页面
-  notificationApi.showNotification('SecurePass 已就绪', 'success');
+onMounted(async () => {
+  // 启动时检查是否已设置主密码：未设置则引导设置，已设置则要求解锁
+  try {
+    const set = await authApi.isSet();
+    authMode.value = set ? 'unlock' : 'setup';
+  } catch (e) {
+    authMode.value = 'unlock';
+  }
+  showAuth.value = true;
 });
+
+// 主密码设置 / 解锁提交
+const submitAuth = async () => {
+  authError.value = '';
+  if (!masterPassword.value) {
+    authError.value = '请输入主密码';
+    return;
+  }
+  if (authMode.value === 'setup') {
+    const missing = masterPasswordRules.value.filter((r) => !r.ok).map((r) => r.label);
+    if (missing.length > 0) {
+      authError.value = '主密码强度不足，需满足：' + missing.join('、');
+      return;
+    }
+  }
+  authLoading.value = true;
+  try {
+    if (authMode.value === 'setup') {
+      await authApi.setup(masterPassword.value);
+      notificationApi.showNotification('主密码设置成功', 'success');
+    } else {
+      await authApi.login(masterPassword.value);
+      notificationApi.showNotification('保险库已解锁', 'success');
+    }
+    masterPassword.value = '';
+    showAuth.value = false;
+    passwordsLoaded.value = true;
+  } catch (e: any) {
+    authError.value = e?.message || '操作失败，请重试';
+  } finally {
+    authLoading.value = false;
+  }
+};
 </script>
 
 <style scoped>
@@ -605,6 +1027,28 @@ onMounted(() => {
 .strength-text {
   margin-left: 10px;
   font-size: 12px;
+}
+
+.strength-rules {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+}
+
+.strength-rules li {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.strength-rules li.ok {
+  color: #67c23a;
+}
+
+.strength-rules li.bad {
+  color: #c0c4cc;
 }
 
 .weak {
