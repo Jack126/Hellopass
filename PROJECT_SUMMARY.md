@@ -45,7 +45,7 @@ passwd/
 - 完整性：SQLite integrity_check + DB/配置 SHA-256 + 锁定基线比对
 - Tauri 2：VaultRuntime + Mutex；命令；窗口/托盘；v2 配置 + 图标 + capabilities
 - 启动器：Ctrl+Alt+Space 唤出、拼音首字母+子序列模糊搜索、回车复制并 30 秒清剪贴板
-- 托盘：搜索/锁定/导入/导出/设置/退出；导入导出走原生文件框，口令在弹窗内收集
+- 托盘：搜索/锁定/设置/退出；导入导出统一在设置窗
 - 前端：独立设置窗（通用/导入导出/安全/审计/关于），不再打包 Element Plus
 - 工程：AppError 统一错误（运行时边界已采用）；24 个单测/集成/安全测试通过；securepass bin 0 警告
 - CI：`.github/workflows/ci.yml` 三平台矩阵（backend tests / frontend build / tauri build）

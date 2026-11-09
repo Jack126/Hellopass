@@ -56,10 +56,6 @@ export const api = {
   resize: (height: number) => request<undefined>('resize_launcher', { height }),
   suppressHide: (suppress: boolean) => request<undefined>('set_suppress_hide', { suppress }),
   setSessionTimeout: (seconds: number) => request<undefined>('set_session_timeout', { seconds }),
-  importFromPath: (path: string, password: string) =>
-    request<unknown>('import_from_path', { path, password }),
-  exportToPath: (path: string, exportPassword: string) =>
-    request<string>('export_to_path', { path, exportPassword }),
 };
 
 export async function listen<T = unknown>(

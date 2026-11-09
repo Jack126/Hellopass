@@ -156,9 +156,15 @@ button.ghost {
 .muted { color: var(--muted); font-size: 12px; margin: 0; }
 .error { color: var(--danger); font-size: 12px; margin: 8px 0 0; flex: none; }
 
-.notice { font-size: 12px; margin: 0; }
-.notice.ok { color: #6fdc9c; }
-.notice.bad { color: var(--danger); }
+.banner.ok {
+  background: rgba(80, 200, 120, 0.12);
+  color: #6fdc9c;
+}
+
+.banner.bad {
+  background: rgba(255, 80, 80, 0.12);
+  color: var(--danger);
+}
 
 .banner {
   margin: 0 0 10px;

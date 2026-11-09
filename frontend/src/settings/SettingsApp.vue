@@ -12,6 +12,8 @@
       </button>
     </nav>
 
+    <p v-if="error" class="banner bad">{{ error }}</p>
+    <p v-else-if="notice" class="banner" :class="noticeKind">{{ notice }}</p>
     <p v-if="!unlocked" class="banner">
       保险库已锁定，请按 Ctrl+Alt+Space 唤出搜索窗解锁后再操作。
     </p>
@@ -84,7 +86,6 @@
           <button :disabled="busy || !restorePath" @click="doRestore">从备份恢复</button>
         </div>
 
-        <p v-if="notice" :class="['notice', noticeKind]">{{ notice }}</p>
       </section>
 
       <!-- 安全 -->
@@ -147,8 +148,6 @@
         </div>
       </section>
     </main>
-
-    <p v-if="error" class="error">{{ error }}</p>
   </div>
 </template>
 

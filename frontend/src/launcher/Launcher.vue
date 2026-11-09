@@ -54,17 +54,16 @@
       <div class="auth-icon">🔒</div>
       <h1>设置主密码</h1>
       <p class="muted">至少 12 位，包含大小写字母、数字和特殊字符</p>
+      <p v-if="error" class="error">{{ error }}</p>
       <input v-model="password" type="password" placeholder="主密码" autocomplete="new-password" @keydown.esc.prevent="hide" />
       <input v-model="password2" type="password" placeholder="再输一次" autocomplete="new-password" @keydown.esc.prevent="hide" />
       <button type="submit" :disabled="busy">创建保险库</button>
-      <p v-if="error" class="error">{{ error }}</p>
     </form>
 
     <!-- 解锁 -->
     <form v-else-if="mode === 'unlock'" class="auth" @submit.prevent="doUnlock">
       <div class="auth-icon">🔒</div>
       <h1>解锁 SecurePass</h1>
-      <p v-if="pendingName" class="muted pending">解锁后将导入：{{ pendingName }}</p>
       <input
         ref="authInput"
         v-model="password"
@@ -74,24 +73,6 @@
         @keydown.esc.prevent="hide"
       />
       <button type="submit" :disabled="busy">解锁</button>
-      <p v-if="error" class="error">{{ error }}</p>
-    </form>
-
-    <!-- 托盘导入/导出的口令输入 -->
-    <form v-else-if="mode === 'prompt'" class="auth" @submit.prevent="submitPrompt">
-      <div class="auth-icon">{{ promptKind === 'import' ? '📥' : '📤' }}</div>
-      <h1>{{ promptKind === 'import' ? '输入导出包密码' : '设置导出密码' }}</h1>
-      <p class="muted">{{ promptKind === 'import' ? promptPath : '至少 8 位，用于加密导出文件' }}</p>
-      <input
-        ref="promptInput"
-        v-model="promptValue"
-        type="password"
-        :placeholder="promptKind === 'import' ? '导出密码' : '导出密码（至少 8 位）'"
-        autocomplete="off"
-        @keydown.esc.prevent="hide"
-      />
-      <button type="submit" :disabled="busy">确定</button>
-      <p v-if="error" class="error">{{ error }}</p>
     </form>
 
     <!-- 详情 -->
@@ -105,6 +86,7 @@
           <p class="muted">{{ detail.username || '无用户名' }}</p>
         </div>
       </header>
+      <p v-if="error" class="error">{{ error }}</p>
       <dl>
         <dt>密码</dt>
         <dd class="secret">
@@ -121,12 +103,12 @@
       <div class="hintbar">
         <span>按住 Alt 看密码</span><span>E 编辑</span><span>Del 两次删除</span><span>Esc 返回</span>
       </div>
-      <p v-if="error" class="error">{{ error }}</p>
     </section>
 
     <!-- 新建 / 编辑 -->
     <form v-else-if="mode === 'edit'" class="edit" @submit.prevent="save">
       <h2>{{ editingId ? '编辑条目' : '新建条目' }}</h2>
+      <p v-if="error" class="error">{{ error }}</p>
       <label>站点名<input v-model="form.site_name" required /></label>
       <label>用户名<input v-model="form.username" /></label>
       <label>
@@ -145,7 +127,6 @@
         <button type="submit" :disabled="busy">保存</button>
         <button type="button" class="ghost" @click="cancelEdit">取消</button>
       </div>
-      <p v-if="error" class="error">{{ error }}</p>
     </form>
   </div>
 </template>
@@ -155,7 +136,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { api, listen, type EntryDetail, type Summary } from './ipc';
 import { highlight, search as fuzzySearch } from './fuzzy';
 
-type Mode = 'setup' | 'unlock' | 'search' | 'detail' | 'edit' | 'prompt';
+type Mode = 'setup' | 'unlock' | 'search' | 'detail' | 'edit';
 
 const mode = ref<Mode>('unlock');
 const items = ref<Summary[]>([]);
@@ -171,15 +152,8 @@ const composing = ref(false);
 const editingId = ref<number | null>(null);
 const confirmDelete = ref(false);
 
-const promptKind = ref<'import' | 'export'>('import');
-const promptPath = ref('');
-const promptValue = ref('');
-const pendingImport = ref<{ path: string; needsPassword: boolean } | null>(null);
-const pendingName = ref('');
-
 const searchInput = ref<HTMLInputElement>();
 const authInput = ref<HTMLInputElement>();
-const promptInput = ref<HTMLInputElement>();
 
 const form = reactive({
   site_name: '',
@@ -216,8 +190,6 @@ function resetSensitive() {
   password.value = '';
   password2.value = '';
   form.password = '';
-  pendingImport.value = null;
-  pendingName.value = '';
 }
 
 async function refresh() {
@@ -234,13 +206,9 @@ async function goSearch() {
   searchInput.value?.focus();
 }
 
-function isPromptMode() {
-  return mode.value === 'prompt';
-}
-
 async function onShown() {
   error.value = '';
-  if (mode.value === 'edit' || isPromptMode()) return;
+  if (mode.value === 'edit') return;
   try {
     if (!(await api.isSet())) {
       mode.value = 'setup';
@@ -249,7 +217,6 @@ async function onShown() {
       return;
     }
     if (!(await api.status())) {
-      if (isPromptMode()) return;
       mode.value = 'unlock';
       await api.suppressHide(true);
       await nextTick();
@@ -290,22 +257,6 @@ async function doUnlock() {
     await api.unlock(password.value);
     password.value = '';
     await refresh();
-    const pending = pendingImport.value;
-    if (pending) {
-      pendingImport.value = null;
-      pendingName.value = '';
-      if (pending.needsPassword) {
-        onTrayPrompt({ kind: 'import', path: pending.path });
-        return;
-      }
-      try {
-        await api.importFromPath(pending.path, '');
-        await hide();
-      } catch (e) {
-        error.value = (e as Error).message;
-      }
-      return;
-    }
     await goSearch();
   } catch (e) {
     error.value = (e as Error).message;
@@ -334,8 +285,6 @@ async function copy(field: 'password' | 'username') {
 
 async function hide() {
   resetSensitive();
-  promptValue.value = '';
-  if (mode.value === 'prompt') mode.value = 'search';
   await api.suppressHide(false);
   await api.hide();
 }
@@ -479,48 +428,6 @@ async function removeEntry() {
   }
 }
 
-async function onPendingImport(payload: {
-  path: string;
-  needsPassword: boolean;
-  name: string;
-}) {
-  pendingImport.value = { path: payload.path, needsPassword: payload.needsPassword };
-  pendingName.value = payload.name;
-  mode.value = 'unlock';
-  error.value = '';
-  await api.suppressHide(true);
-  await api.resize(420);
-  await nextTick();
-  authInput.value?.focus();
-}
-
-function onTrayPrompt(payload: { kind: 'import' | 'export'; path: string }) {
-  promptKind.value = payload.kind;
-  promptPath.value = payload.path;
-  promptValue.value = '';
-  error.value = '';
-  mode.value = 'prompt';
-  void api.suppressHide(true);
-  void api.resize(420).then(() => nextTick().then(() => promptInput.value?.focus()));
-}
-
-async function submitPrompt() {
-  error.value = '';
-  busy.value = true;
-  try {
-    if (promptKind.value === 'import') {
-      await api.importFromPath(promptPath.value, promptValue.value);
-    } else {
-      await api.exportToPath(promptPath.value, promptValue.value);
-    }
-    await hide();
-  } catch (e) {
-    error.value = (e as Error).message;
-  } finally {
-    busy.value = false;
-  }
-}
-
 async function showPassword() {
   if (mode.value !== 'detail' || !detail.value || revealed.value) return;
   try {
@@ -568,19 +475,8 @@ onMounted(async () => {
     })
   );
   unlisten.push(
-    await listen<{ kind: 'import' | 'export'; path: string }>('tray-prompt', onTrayPrompt)
-  );
-  unlisten.push(
-    await listen<{ path: string; needsPassword: boolean; name: string }>(
-      'tray-pending-import',
-      onPendingImport
-    )
-  );
-  unlisten.push(
     await listen('vault-locked', () => {
       resetSensitive();
-      pendingImport.value = null;
-      pendingName.value = '';
       items.value = [];
       mode.value = 'unlock';
       void api.suppressHide(true);
@@ -604,10 +500,6 @@ watch(mode, async (m) => {
   if (m === 'unlock' || m === 'setup') {
     await nextTick();
     authInput.value?.focus();
-  }
-  if (m === 'prompt') {
-    await nextTick();
-    promptInput.value?.focus();
   }
 });
 </script>

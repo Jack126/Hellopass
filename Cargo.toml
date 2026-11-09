@@ -27,8 +27,6 @@ zeroize = { version = "1", features = ["derive"] }
 # `cargo test --bin securepass_cli --no-default-features` 跑核心单元测试。
 tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "2", optional = true }
-tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
 pinyin = "0.11"
 
@@ -52,8 +50,8 @@ tauri-app = [
     "dep:tauri",
     "dep:tauri-build",
     "dep:tauri-plugin-global-shortcut",
-    "dep:tauri-plugin-dialog",
-    "dep:tauri-plugin-notification",
+
+
     "dep:tauri-plugin-clipboard-manager",
 ]
 

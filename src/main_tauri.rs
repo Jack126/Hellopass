@@ -14,7 +14,6 @@ use std::time::Duration as StdDuration;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use crate::api::runtime::VaultRuntime;
 use crate::api::dto::*;
@@ -26,8 +25,6 @@ type VaultState = Mutex<VaultRuntime>;
 #[derive(Default)]
 struct LauncherFlags {
     suppress_hide: AtomicBool,
-    /// 保险库锁定时从托盘选中的导入文件，解锁后继续导入
-    pending_import: Mutex<Option<String>>,
 }
 
 const DEFAULT_ACCEL: &str = "control+alt+space";
@@ -324,100 +321,6 @@ fn set_hotkey(
     }
 }
 
-/// 托盘动作的诊断日志：GUI 下 stderr 不可见，追加到 %APPDATA%/.../config/tray.log。
-fn trace(app: &AppHandle, message: &str) {
-    use std::io::Write;
-    if let Ok(dir) = app.path().app_data_dir() {
-        let path = dir.join("config").join("tray.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(f, "{} {}", chrono::Utc::now().to_rfc3339(), message);
-        }
-    }
-}
-
-/// 托盘动作的结果用原生消息框展示：未安装的应用里系统 toast 可能静默失败。
-fn notify(app: &AppHandle, body: &str) {
-    trace(app, &format!("notify: {}", body));
-    app.dialog().message(body).title("SecurePass").show(|_| {});
-}
-
-fn vault_is_unlocked(app: &AppHandle) -> bool {
-    app.try_state::<VaultState>()
-        .map(|s| s.lock().unwrap().is_unlocked())
-        .unwrap_or(false)
-}
-
-fn write_secret_file(path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    std::fs::write(path, content.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            let _ = std::fs::set_permissions(path, perms);
-        }
-    }
-    Ok(())
-}
-
-/// 托盘导入：明文数据直接导入；.spb 需要口令，交给启动器弹口令输入。
-#[tauri::command]
-fn import_from_path(
-    app: AppHandle,
-    state: State<'_, VaultState>,
-    path: String,
-    password: Option<String>,
-) -> ApiResponse<ImportResult> {
-    let data = match std::fs::read_to_string(&path) {
-        Ok(d) => d,
-        Err(e) => return ApiResponse::err_message(format!("读取文件失败: {}", e)),
-    };
-    trace(&app, &format!("import_from_path: {}", path));
-    let mut g = state.lock().unwrap();
-    let result = if path.to_lowercase().ends_with(".spb") {
-        g.import_encrypted(data, password.unwrap_or_default())
-    } else {
-        g.import_passwords(data)
-    };
-    if let Some(r) = &result.data {
-        notify(
-            &app,
-            &format!(
-                "导入 {} 条，跳过 {} 条重复",
-                r.imported_count, r.skipped_count
-            ),
-        );
-    }
-    result
-}
-
-/// 托盘导出：内容由后端生成，前端只负责收集导出密码和保存路径。
-#[tauri::command]
-fn export_to_path(
-    app: AppHandle,
-    state: State<'_, VaultState>,
-    path: String,
-    export_password: String,
-) -> ApiResponse<String> {
-    let content = {
-        let mut g = state.lock().unwrap();
-        match g.export_encrypted(&export_password, None) {
-            ApiResponse { success: true, data: Some(c), .. } => c,
-            ApiResponse { error, .. } => {
-                return ApiResponse::err_message(error.unwrap_or_else(|| "导出失败".into()))
-            }
-        }
-    };
-    match write_secret_file(std::path::Path::new(&path), &content) {
-        Ok(_) => {
-            notify(&app, &format!("密码已导出到：{}", path));
-            ApiResponse::ok(path)
-        }
-        Err(e) => ApiResponse::err_message(format!("写入文件失败: {}", e)),
-    }
-}
-
 /// 调整启动器高度：搜索 420，详情/编辑 560。
 #[tauri::command]
 fn resize_launcher(app: AppHandle, height: f64) -> ApiResponse<()> {
@@ -429,18 +332,11 @@ fn resize_launcher(app: AppHandle, height: f64) -> ApiResponse<()> {
 }
 
 fn show_launcher(app: &AppHandle) {
-    match app.get_webview_window("launcher") {
-        Some(w) => {
-            let _ = w.center();
-            let _ = w.show();
-            let _ = w.set_focus();
-            let _ = app.emit("launcher-shown", ());
-            trace(app, "launcher shown");
-        }
-        None => {
-            trace(app, "launcher window missing");
-            notify(app, "启动器窗口不可用，请重启 SecurePass。");
-        }
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.center();
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = app.emit("launcher-shown", ());
     }
 }
 
@@ -636,8 +532,6 @@ fn main() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // 解析应用数据目录（跨平台）
@@ -737,10 +631,6 @@ fn main() {
                 .expect("创建菜单项失败");
             let lock = MenuItem::with_id(app, "lock", "立即锁定", true, None::<&str>)
                 .expect("创建菜单项失败");
-            let import = MenuItem::with_id(app, "import", "导入密码…", true, None::<&str>)
-                .expect("创建菜单项失败");
-            let export = MenuItem::with_id(app, "export", "导出密码…", true, None::<&str>)
-                .expect("创建菜单项失败");
             let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)
                 .expect("创建菜单项失败");
             let quit = MenuItem::with_id(app, "quit", "退出 SecurePass", true, None::<&str>)
@@ -748,7 +638,7 @@ fn main() {
             let sep1 = PredefinedMenuItem::separator(app).expect("创建分隔符失败");
             let sep2 = PredefinedMenuItem::separator(app).expect("创建分隔符失败");
             let menu = MenuBuilder::new(app)
-                .items(&[&search, &lock, &sep1, &import, &export, &settings, &sep2, &quit])
+                .items(&[&search, &lock, &sep1, &settings, &sep2, &quit])
                 .build()
                 .expect("创建菜单失败");
 
@@ -769,117 +659,6 @@ fn main() {
                         let _ = app.emit("vault-locked", ());
                         if let Some(w) = app.get_webview_window("launcher") {
                             let _ = w.hide();
-                        }
-                    }
-                    // 导入/导出：原生文件框选路径，.spb 的口令交给启动器收集
-                    "import" => {
-                        trace(app, "menu: import clicked");
-                        let handle = app.clone();
-                        app.dialog()
-                            .file()
-                            .set_title("选择要导入的文件")
-                            .add_filter("密码数据", &["spb", "json", "csv"])
-                            .pick_file(move |picked| {
-                                let Some(fp) = picked else {
-                                    trace(&handle, "import: dialog cancelled");
-                                    return;
-                                };
-                                let Ok(path) = fp.into_path() else {
-                                    notify(&handle, "无法读取所选文件路径");
-                                    return;
-                                };
-                                let path_str = path.to_string_lossy().to_string();
-                                trace(&handle, &format!("import: picked {}", path_str));
-                                if !vault_is_unlocked(&handle) {
-                                    let name = path
-                                        .file_name()
-                                        .map(|s| s.to_string_lossy().to_string())
-                                        .unwrap_or_default();
-                                    if let Some(flags) = handle.try_state::<LauncherFlags>() {
-                                        *flags.pending_import.lock().unwrap() = Some(path_str.clone());
-                                        flags.suppress_hide.store(true, Ordering::Relaxed);
-                                    }
-                                    trace(&handle, "import: vault locked, waiting for unlock");
-                                    show_launcher(&handle);
-                                    let _ = handle.emit(
-                                        "tray-pending-import",
-                                        serde_json::json!({
-                                            "path": path_str,
-                                            "needsPassword": path_str.to_lowercase().ends_with(".spb"),
-                                            "name": name,
-                                        }),
-                                    );
-                                    return;
-                                }
-                                if path_str.to_lowercase().ends_with(".spb") {
-                                    if let Some(flags) = handle.try_state::<LauncherFlags>() {
-                                        flags.suppress_hide.store(true, Ordering::Relaxed);
-                                    }
-                                    show_launcher(&handle);
-                                    let _ = handle.emit(
-                                        "tray-prompt",
-                                        serde_json::json!({ "kind": "import", "path": path_str }),
-                                    );
-                                } else {
-                                    match std::fs::read_to_string(&path) {
-                                        Ok(text) => {
-                                            trace(&handle, &format!("import: read {} bytes", text.len()));
-                                            if let Some(state) = handle.try_state::<VaultState>() {
-                                                let res = state.lock().unwrap().import_passwords(text);
-                                                if let Some(r) = res.data {
-                                                    trace(&handle, &format!(
-                                                        "import: ok imported={} skipped={}",
-                                                        r.imported_count, r.skipped_count
-                                                    ));
-                                                    notify(&handle, &format!(
-                                                        "导入 {} 条，跳过 {} 条重复",
-                                                        r.imported_count, r.skipped_count
-                                                    ));
-                                                } else if let Some(e) = res.error {
-                                                    trace(&handle, &format!("import: failed {}", e));
-                                                    notify(&handle, &format!("导入失败: {}", e));
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            trace(&handle, &format!("import: read failed {}", e));
-                                            notify(&handle, &format!("读取文件失败: {}", e));
-                                        }
-                                    }
-                                }
-                            });
-                    }
-                    "export" => {
-                        trace(app, "menu: export clicked");
-                        if !vault_is_unlocked(app) {
-                            notify(app, "保险库已锁定。请先按 Ctrl+Alt+Space 唤出窗口解锁，再重新导出。");
-                        } else {
-                            let handle = app.clone();
-                            app.dialog()
-                                .file()
-                                .set_title("导出加密密码包")
-                                .set_file_name("securepass-export.spb")
-                                .add_filter("SecurePass 导出包", &["spb"])
-                                .save_file(move |picked| {
-                                    let Some(fp) = picked else {
-                                        trace(&handle, "export: dialog cancelled");
-                                        return;
-                                    };
-                                    let Ok(path) = fp.into_path() else {
-                                        notify(&handle, "无法读取所选保存路径");
-                                        return;
-                                    };
-                                    let path_str = path.to_string_lossy().to_string();
-                                    trace(&handle, &format!("export: path {}", path_str));
-                                    if let Some(flags) = handle.try_state::<LauncherFlags>() {
-                                        flags.suppress_hide.store(true, Ordering::Relaxed);
-                                    }
-                                    show_launcher(&handle);
-                                    let _ = handle.emit(
-                                        "tray-prompt",
-                                        serde_json::json!({ "kind": "export", "path": path_str }),
-                                    );
-                                });
                         }
                     }
                     "settings" => open_settings(app),
@@ -930,8 +709,6 @@ fn main() {
             vault_status,
             copy_secret,
             reveal_password,
-            import_from_path,
-            export_to_path,
             get_entry_detail,
             resize_launcher,
             hide_launcher,
