@@ -209,6 +209,7 @@
       <el-form label-width="90px" style="margin-top: 16px;">
         <el-form-item label="导出密码">
           <el-input
+            ref="exportPasswordInputRef"
             v-model="exportPassword"
             type="password"
             show-password
@@ -528,6 +529,7 @@ const integrityLoading = ref(false);
 const exportCandidates = ref<PasswordEntry[]>([]);
 const exportSelectedIds = ref<number[]>([]);
 const exportTableRef = ref();
+const exportPasswordInputRef = ref();
 const exportPassword = ref('');
 const exportPasswordConfirm = ref('');
 
@@ -769,6 +771,8 @@ const onExportSelectionChange = (rows: PasswordEntry[]) => {
   exportSelectedIds.value = rows
     .map((row) => row.id)
     .filter((id): id is number => typeof id === 'number');
+  // 勾选完条目后直接聚焦导出密码输入框
+  nextTick(() => exportPasswordInputRef.value?.focus());
 };
 
 const selectAllExports = () => {

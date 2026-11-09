@@ -96,10 +96,9 @@ impl MasterPasswordManager {
             return Err(MasterPasswordError::IncorrectPassword);
         }
 
-        // 验证通过：构建正式密钥管理器供后续使用
-        let key_manager = KeyManager::from_existing(password, config.salt.as_slice(), config.iterations)
-            .map_err(|_| MasterPasswordError::IncorrectPassword)?;
-        self.key_manager = Some(key_manager);
+        // 验证通过：直接复用上面已派生好的引擎。
+        // 之前这里又做了一次 PBKDF2（600k 次），把解锁耗时翻倍。
+        self.key_manager = Some(KeyManager::from_engine(engine));
         Ok(())
     }
 

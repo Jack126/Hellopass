@@ -33,14 +33,6 @@ impl KeyManager {
         Ok(Self { crypto_engine, created_at })
     }
 
-    /// 从已有 salt 恢复密钥管理器（用于验证主密码 / 重启恢复）
-    pub fn from_existing(password: &str, salt: &[u8], iterations: u32) -> Result<Self, KeyManagementError> {
-        let crypto_engine = SecureCryptoEngine::new_with_iterations(password, Some(salt), iterations)
-            .map_err(|_| KeyManagementError::KeyDerivationFailed)?;
-        let created_at = chrono::Utc::now().to_rfc3339();
-        Ok(Self { crypto_engine, created_at })
-    }
-
     /// 用已派生好的引擎直接构造（改密时避免重复做 PBKDF2）。
     pub fn from_engine(crypto_engine: SecureCryptoEngine) -> Self {
         Self {

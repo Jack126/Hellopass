@@ -40,8 +40,19 @@ tauri-build = { version = "2", optional = true , features = [] }
 default = ["tauri-app"]
 tauri-app = ["dep:tauri", "dep:tauri-build"]
 
+# 依赖（pbkdf2/sha2/aes-gcm 等）在 dev 下也开优化。
+# 未优化的 600k 次 PBKDF2 单次就要 8 秒左右，登录会卡十几秒。
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.test.package."*"]
+opt-level = 2
+
 [profile.dev]
-opt-level = 0
+# PBKDF2/HMAC 是泛型，会被单态化进本 crate，依赖开优化还不够。
+# opt-level=0 时单次 600k PBKDF2 要数秒，登录会明显卡顿。
+opt-level = 2
+debug = true
 
 [profile.release]
 opt-level = 3
