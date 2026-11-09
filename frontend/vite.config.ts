@@ -11,7 +11,10 @@ export default defineConfig({
     },
   },
   server: {
+    // Tauri 固定访问 127.0.0.1:3000，这里必须与 devUrl 一致且不自动换端口
+    host: '127.0.0.1',
     port: 3000,
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

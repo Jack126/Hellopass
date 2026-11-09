@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "identifier": "com.securepass.app",
   "build": {
-    "beforeDevCommand": "cd frontend && npm run dev",
-    "beforeBuildCommand": "cd frontend && npm run build",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://127.0.0.1:3000",
     "frontendDist": "frontend/dist"
   },
