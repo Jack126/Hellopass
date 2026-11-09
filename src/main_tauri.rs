@@ -27,17 +27,22 @@ struct LauncherFlags {
     suppress_hide: AtomicBool,
 }
 
-const DEFAULT_ACCEL: &str = "control+alt+space";
+const DEFAULT_WAKE_ACCEL: &str = "control+alt+space";
+const DEFAULT_LOCK_ACCEL: &str = "control+alt+l";
 
 #[derive(Clone, serde::Serialize)]
 struct HotkeyInfo {
-    accelerator: String,
-    display: String,
+    wake: String,
+    wake_display: String,
+    lock: String,
+    lock_display: String,
 }
 
 struct HotkeyStateInner {
-    shortcut: Shortcut,
-    display: String,
+    wake: Shortcut,
+    wake_display: String,
+    lock: Shortcut,
+    lock_display: String,
     suspended: bool,
     path: std::path::PathBuf,
 }
@@ -90,21 +95,37 @@ fn parse_hotkey(accel: &str) -> Result<Shortcut, String> {
     Ok(sc)
 }
 
-fn info_of(sc: &Shortcut) -> HotkeyInfo {
+fn info_of(wake: &Shortcut, lock: &Shortcut) -> HotkeyInfo {
     HotkeyInfo {
-        accelerator: format!("{}", sc),
-        display: hotkey_display(sc),
+        wake: format!("{}", wake),
+        wake_display: hotkey_display(wake),
+        lock: format!("{}", lock),
+        lock_display: hotkey_display(lock),
     }
 }
 
-fn load_saved_accel(path: &std::path::Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value.get("accelerator")?.as_str().map(|s| s.to_string())
+fn load_saved_accels(path: &std::path::Path) -> (Option<String>, Option<String>) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return (None, None);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return (None, None);
+    };
+    (
+        value.get("accelerator").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        value
+            .get("lock_accelerator")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    )
 }
 
-fn save_accel(path: &std::path::Path, accel: &str) {
-    let body = serde_json::json!({ "accelerator": accel }).to_string();
+fn save_accels(path: &std::path::Path, wake: &str, lock: &str) {
+    let body = serde_json::json!({
+        "accelerator": wake,
+        "lock_accelerator": lock,
+    })
+    .to_string();
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, body).is_ok() {
         let _ = std::fs::rename(&tmp, path);
@@ -265,14 +286,15 @@ fn set_suppress_hide(app: AppHandle, suppress: bool) -> ApiResponse<()> {
 #[tauri::command]
 fn get_hotkey(state: State<'_, HotkeyState>) -> ApiResponse<HotkeyInfo> {
     let g = state.0.lock().unwrap();
-    ApiResponse::ok(info_of(&g.shortcut))
+    ApiResponse::ok(info_of(&g.wake, &g.lock))
 }
 
-/// 开始录制：先注销当前热键，否则系统会把组合键截走，录制窗口收不到按键。
+/// 开始录制：两个热键都先注销，否则系统会把组合键截走。
 #[tauri::command]
 fn begin_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiResponse<()> {
     let mut g = state.0.lock().unwrap();
-    let _ = app.global_shortcut().unregister(g.shortcut.clone());
+    let _ = app.global_shortcut().unregister(g.wake.clone());
+    let _ = app.global_shortcut().unregister(g.lock.clone());
     g.suspended = true;
     ApiResponse::ok(())
 }
@@ -281,8 +303,11 @@ fn begin_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiRes
 fn end_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiResponse<()> {
     let mut g = state.0.lock().unwrap();
     if g.suspended {
-        if let Err(e) = app.global_shortcut().register(g.shortcut.clone()) {
-            crate::utils::log::error("hotkey", &format!("恢复热键失败: {}", e));
+        if let Err(e) = app.global_shortcut().register(g.wake.clone()) {
+            crate::utils::log::error("hotkey", &format!("恢复唤醒热键失败: {}", e));
+        }
+        if let Err(e) = app.global_shortcut().register(g.lock.clone()) {
+            crate::utils::log::error("hotkey", &format!("恢复锁定热键失败: {}", e));
         }
         g.suspended = false;
     }
@@ -293,29 +318,50 @@ fn end_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiRespo
 fn set_hotkey(
     app: AppHandle,
     state: State<'_, HotkeyState>,
+    kind: String,
     accelerator: String,
 ) -> ApiResponse<HotkeyInfo> {
+    if kind != "wake" && kind != "lock" {
+        return ApiResponse::err_message("未知的热键类型");
+    }
     let new = match parse_hotkey(&accelerator) {
         Ok(s) => s,
         Err(e) => return ApiResponse::err_message(e),
     };
     let mut g = state.0.lock().unwrap();
-    let old = g.shortcut.clone();
+    let (old, other) = if kind == "lock" {
+        (g.lock.clone(), g.wake.clone())
+    } else {
+        (g.wake.clone(), g.lock.clone())
+    };
+    if new == other {
+        return ApiResponse::err_message("不能与另一个热键相同");
+    }
     let _ = app.global_shortcut().unregister(old.clone());
     match app.global_shortcut().register(new.clone()) {
         Ok(_) => {
-            g.shortcut = new.clone();
-            g.display = hotkey_display(&new);
-            g.suspended = false;
-            save_accel(&g.path, &format!("{}", new));
-            ApiResponse::ok(info_of(&new))
+            if kind == "lock" {
+                g.lock = new.clone();
+                g.lock_display = hotkey_display(&new);
+            } else {
+                g.wake = new.clone();
+                g.wake_display = hotkey_display(&new);
+            }
+            if g.suspended {
+                let _ = app.global_shortcut().register(other);
+                g.suspended = false;
+            }
+            save_accels(&g.path, &format!("{}", g.wake), &format!("{}", g.lock));
+            ApiResponse::ok(info_of(&g.wake, &g.lock))
         }
         Err(e) => {
-            // 注册失败就把旧热键恢复回去，避免应用失去唤出方式
             if let Err(restore) = app.global_shortcut().register(old.clone()) {
                 crate::utils::log::error("hotkey", &format!("恢复旧热键失败: {}", restore));
             }
-            g.suspended = false;
+            if g.suspended {
+                let _ = app.global_shortcut().register(other);
+                g.suspended = false;
+            }
             ApiResponse::err_message(format!("注册失败：{}（可能被其他程序占用）", e))
         }
     }
@@ -350,6 +396,49 @@ fn toggle_launcher(app: &AppHandle) {
     }
 }
 
+fn lock_vault(app: &AppHandle) {
+    if let Some(state) = app.try_state::<VaultState>() {
+        state.lock().unwrap().lock();
+    }
+    let _ = app.emit("vault-locked", ());
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.hide();
+    }
+    // 设置窗里有库内容/审计信息，锁定后直接关掉
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.close();
+    }
+}
+
+/// 注册单个热键：优先用保存值，失败退回默认值。
+fn register_hotkey_with_fallback(
+    app: &AppHandle,
+    saved: Option<String>,
+    default_accel: &str,
+    label: &str,
+) -> Shortcut {
+    let default = parse_hotkey(default_accel).expect("默认热键必须可解析");
+    let mut chosen = saved
+        .and_then(|s| parse_hotkey(&s).ok())
+        .unwrap_or_else(|| default.clone());
+    if let Err(e) = app.global_shortcut().register(chosen.clone()) {
+        crate::utils::log::error(
+            "hotkey",
+            &format!("注册{}热键 {} 失败: {}", label, hotkey_display(&chosen), e),
+        );
+        if chosen != default {
+            chosen = default.clone();
+            if let Err(e2) = app.global_shortcut().register(chosen.clone()) {
+                crate::utils::log::error(
+                    "hotkey",
+                    &format!("注册默认{}热键失败: {}", label, e2),
+                );
+            }
+        }
+    }
+    chosen
+}
+
 fn open_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.show();
@@ -374,7 +463,8 @@ fn open_settings(app: &AppHandle) {
                 if let Some(state) = handle.try_state::<HotkeyState>() {
                     let mut g = state.0.lock().unwrap();
                     if g.suspended {
-                        let _ = handle.global_shortcut().register(g.shortcut.clone());
+                        let _ = handle.global_shortcut().register(g.wake.clone());
+                        let _ = handle.global_shortcut().register(g.lock.clone());
                         g.suspended = false;
                     }
                 }
@@ -531,9 +621,21 @@ fn main() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let Some(state) = app.try_state::<HotkeyState>() else {
+                        return;
+                    };
+                    let (is_wake, is_lock) = {
+                        let g = state.0.lock().unwrap();
+                        (g.wake == *shortcut, g.lock == *shortcut)
+                    };
+                    if is_wake {
                         toggle_launcher(app);
+                    } else if is_lock {
+                        lock_vault(app);
                     }
                 })
                 .build(),
@@ -605,28 +707,26 @@ fn main() {
                 _ => {}
             });
 
-            // 全局热键：优先用设置里保存的组合，注册失败则退回默认值
-            let default_shortcut = parse_hotkey(DEFAULT_ACCEL).expect("默认热键必须可解析");
-            let saved = load_saved_accel(&hotkey_path).unwrap_or_else(|| DEFAULT_ACCEL.to_string());
-            let mut chosen = parse_hotkey(&saved).unwrap_or_else(|_| default_shortcut.clone());
-            if let Err(e) = app.global_shortcut().register(chosen.clone()) {
-                crate::utils::log::error(
-                    "hotkey",
-                    &format!("注册热键 {} 失败: {}", hotkey_display(&chosen), e),
-                );
-                if chosen != default_shortcut {
-                    chosen = default_shortcut.clone();
-                    if let Err(e2) = app.global_shortcut().register(chosen.clone()) {
-                        crate::utils::log::error(
-                            "hotkey",
-                            &format!("注册默认热键失败: {}", e2),
-                        );
-                    }
-                }
-            }
+            // 全局热键：唤醒 / 锁定各一个，优先用保存值，失败退回默认值
+            let (saved_wake, saved_lock) = load_saved_accels(&hotkey_path);
+            let handle = app.handle().clone();
+            let wake = register_hotkey_with_fallback(
+                &handle,
+                saved_wake,
+                DEFAULT_WAKE_ACCEL,
+                "唤醒",
+            );
+            let lock = register_hotkey_with_fallback(
+                &handle,
+                saved_lock,
+                DEFAULT_LOCK_ACCEL,
+                "锁定",
+            );
             app.manage(HotkeyState(Mutex::new(HotkeyStateInner {
-                display: hotkey_display(&chosen),
-                shortcut: chosen,
+                wake_display: hotkey_display(&wake),
+                wake,
+                lock_display: hotkey_display(&lock),
+                lock,
                 suspended: false,
                 path: hotkey_path,
             })));
@@ -658,15 +758,7 @@ fn main() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "search" => show_launcher(app),
-                    "lock" => {
-                        if let Some(state) = app.try_state::<VaultState>() {
-                            state.lock().unwrap().lock();
-                        }
-                        let _ = app.emit("vault-locked", ());
-                        if let Some(w) = app.get_webview_window("launcher") {
-                            let _ = w.hide();
-                        }
-                    }
+                    "lock" => lock_vault(app),
                     "settings" => open_settings(app),
                     "quit" => {
                         // 退出前正常锁定：写入完整性基线，避免下次解锁误报「不一致」

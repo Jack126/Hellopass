@@ -39,17 +39,26 @@
         <div class="card">
           <h2>全局热键</h2>
           <div class="hotkey-row">
-            <kbd class="hotkey">{{ hotkeyDisplay }}</kbd>
-            <button v-if="!recording" class="ghost" @click="startRecord">修改</button>
+            <span class="hotkey-label">唤醒搜索</span>
+            <kbd class="hotkey">{{ wakeDisplay }}</kbd>
+            <button v-if="recordingKind !== 'wake'" class="ghost" @click="startRecord('wake')">修改</button>
             <button v-else class="ghost" @click="cancelRecord">取消</button>
           </div>
-          <p v-if="recording" class="muted">
-            {{ capturedDisplay ? `将设置为 ${capturedDisplay}` : '请按下新的组合键（至少带 Ctrl / Alt / Shift，F1~F24 可单独使用）' }}
-          </p>
-          <div v-if="recording && capturedAccel" class="actions">
-            <button :disabled="savingHotkey" @click="saveHotkey">保存</button>
+          <div class="hotkey-row">
+            <span class="hotkey-label">立即锁定</span>
+            <kbd class="hotkey">{{ lockDisplay }}</kbd>
+            <button v-if="recordingKind !== 'lock'" class="ghost" @click="startRecord('lock')">修改</button>
+            <button v-else class="ghost" @click="cancelRecord">取消</button>
           </div>
-          <p class="muted">录制期间当前热键会被临时注销；按 Esc 取消。</p>
+          <template v-if="recordingKind">
+            <p class="muted">
+              {{ capturedDisplay ? `将设置为 ${capturedDisplay}` : '请按下新的组合键（至少带 Ctrl / Alt / Shift，F1~F24 可单独使用）' }}
+            </p>
+            <div v-if="capturedAccel" class="actions">
+              <button :disabled="savingHotkey" @click="saveHotkey">保存</button>
+            </div>
+            <p class="muted">录制期间两个热键都会临时注销；按 Esc 取消。</p>
+          </template>
         </div>
 
         <div class="card">
@@ -197,8 +206,9 @@ const notice = ref('');
 const noticeKind = ref<'ok' | 'bad'>('ok');
 
 const autoLock = ref(0);
-const hotkeyDisplay = ref('Ctrl + Alt + Space');
-const recording = ref(false);
+const wakeDisplay = ref('Ctrl + Alt + Space');
+const lockDisplay = ref('Ctrl + Alt + L');
+const recordingKind = ref<'wake' | 'lock' | null>(null);
 const capturedAccel = ref('');
 const capturedDisplay = ref('');
 const savingHotkey = ref(false);
@@ -225,16 +235,28 @@ function prettyToken(token: string): string {
   return token;
 }
 
-async function loadHotkey() {
-  const info = await guard(() => request<{ accelerator: string; display: string }>('get_hotkey'));
-  if (info) hotkeyDisplay.value = info.display;
+interface HotkeyInfo {
+  wake: string;
+  wake_display: string;
+  lock: string;
+  lock_display: string;
 }
 
-function startRecord() {
+function applyHotkeyInfo(info: HotkeyInfo) {
+  wakeDisplay.value = info.wake_display;
+  lockDisplay.value = info.lock_display;
+}
+
+async function loadHotkey() {
+  const info = await guard(() => request<HotkeyInfo>('get_hotkey'));
+  if (info) applyHotkeyInfo(info);
+}
+
+function startRecord(kind: 'wake' | 'lock') {
   capturedAccel.value = '';
   capturedDisplay.value = '';
   error.value = '';
-  recording.value = true;
+  recordingKind.value = kind;
   void request('begin_hotkey_capture');
   window.addEventListener('keydown', onRecordKey, true);
   window.addEventListener('blur', onRecordBlur);
@@ -243,16 +265,16 @@ function startRecord() {
 function stopRecord(restore: boolean) {
   window.removeEventListener('keydown', onRecordKey, true);
   window.removeEventListener('blur', onRecordBlur);
-  recording.value = false;
+  recordingKind.value = null;
   if (restore) void request('end_hotkey_capture');
 }
 
 function onRecordBlur() {
-  if (recording.value) stopRecord(true);
+  if (recordingKind.value) stopRecord(true);
 }
 
 function onRecordKey(e: KeyboardEvent) {
-  if (!recording.value) return;
+  if (!recordingKind.value) return;
   e.preventDefault();
   e.stopPropagation();
   const mods: string[] = [];
@@ -277,14 +299,17 @@ function onRecordKey(e: KeyboardEvent) {
 }
 
 async function saveHotkey() {
+  const kind = recordingKind.value;
+  if (!kind) return;
   savingHotkey.value = true;
   try {
-    const info = await request<{ accelerator: string; display: string }>('set_hotkey', {
+    const info = await request<HotkeyInfo>('set_hotkey', {
+      kind,
       accelerator: capturedAccel.value,
     });
-    hotkeyDisplay.value = info.display;
+    applyHotkeyInfo(info);
     stopRecord(false);
-    setNotice('热键已更新');
+    setNotice(kind === 'lock' ? '锁定热键已更新' : '唤醒热键已更新');
   } catch (e) {
     error.value = (e as Error).message;
     stopRecord(true);
@@ -480,7 +505,7 @@ async function loadAudit() {
 }
 
 onBeforeUnmount(() => {
-  if (recording.value) void request('end_hotkey_capture');
+  if (recordingKind.value) void request('end_hotkey_capture');
 });
 
 onMounted(async () => {
