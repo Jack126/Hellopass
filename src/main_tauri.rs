@@ -27,6 +27,10 @@ struct LauncherFlags {
     suppress_hide: AtomicBool,
 }
 
+/// 记录最近一次写进剪贴板的密码摘要，锁定时只在内容仍是它时才清空。
+#[derive(Default)]
+struct ClipboardGuard(Mutex<Option<String>>);
+
 const DEFAULT_WAKE_ACCEL: &str = "control+alt+space";
 const DEFAULT_LOCK_ACCEL: &str = "control+alt+l";
 
@@ -151,9 +155,10 @@ fn unlock(state: State<'_, VaultState>, master_password: String) -> ApiResponse<
 }
 
 #[tauri::command]
-fn lock(state: State<'_, VaultState>) -> ApiResponse<()> {
+fn lock(app: AppHandle, state: State<'_, VaultState>) -> ApiResponse<()> {
     let mut g = state.lock().unwrap();
     g.lock();
+    clear_clipboard_if_ours(&app);
     ApiResponse::ok(())
 }
 
@@ -211,17 +216,47 @@ fn secret_digest(secret: &str) -> String {
     format!("{:x}", h.finalize())
 }
 
-/// 30 秒后只在剪贴板内容仍是我们写入的那份时才清空，避免误删用户后来复制的内容。
-fn schedule_clipboard_clear(app: AppHandle, secret: &str) {
-    let digest = secret_digest(secret);
+/// 30 秒后清空；若期间剪贴板被用户改过、或已因锁定清空，则不动。
+fn schedule_clipboard_clear(app: AppHandle, digest: String) {
     std::thread::spawn(move || {
         std::thread::sleep(StdDuration::from_secs(30));
+        let Some(guard) = app.try_state::<ClipboardGuard>() else {
+            return;
+        };
+        let still_ours = {
+            let mut g = guard.0.lock().unwrap();
+            if g.as_deref() == Some(digest.as_str()) {
+                *g = None;
+                true
+            } else {
+                false
+            }
+        };
+        if !still_ours {
+            return;
+        }
         if let Ok(current) = app.clipboard().read_text() {
             if secret_digest(&current) == digest {
                 let _ = app.clipboard().clear();
             }
         }
     });
+}
+
+/// 剪贴板里若仍是我们复制的密码，立即清空（锁定/退出时调用）。
+fn clear_clipboard_if_ours(app: &AppHandle) {
+    let Some(guard) = app.try_state::<ClipboardGuard>() else {
+        return;
+    };
+    let digest = { guard.0.lock().unwrap().take() };
+    let Some(digest) = digest else {
+        return;
+    };
+    if let Ok(current) = app.clipboard().read_text() {
+        if secret_digest(&current) == digest {
+            let _ = app.clipboard().clear();
+        }
+    }
 }
 
 /// 复制密码/用户名：解密、写剪贴板、定时清理都在 Rust 侧完成，明文不经过前端。
@@ -242,7 +277,11 @@ fn copy_secret(
     if let Err(e) = app.clipboard().write_text(secret.as_str()) {
         return ApiResponse::err_message(format!("写入剪贴板失败: {}", e));
     }
-    schedule_clipboard_clear(app, secret.as_str());
+    let digest = secret_digest(secret.as_str());
+    if let Some(guard) = app.try_state::<ClipboardGuard>() {
+        *guard.0.lock().unwrap() = Some(digest.clone());
+    }
+    schedule_clipboard_clear(app, digest);
     ApiResponse::ok(())
 }
 
@@ -400,6 +439,7 @@ fn lock_vault(app: &AppHandle) {
     if let Some(state) = app.try_state::<VaultState>() {
         state.lock().unwrap().lock();
     }
+    clear_clipboard_if_ours(app);
     let _ = app.emit("vault-locked", ());
     if let Some(w) = app.get_webview_window("launcher") {
         let _ = w.hide();
@@ -663,6 +703,7 @@ fn main() {
             // 管理保险库运行时（Mutex 保证 Send+Sync）
             app.manage(Mutex::new(VaultRuntime::new(config_dir, db_path)));
             app.manage(LauncherFlags::default());
+            app.manage(ClipboardGuard::default());
 
             // 启动器窗口：常驻但不显示，热键唤出
             let _launcher = tauri::WebviewWindowBuilder::new(
@@ -831,6 +872,7 @@ fn main() {
                 if let Some(state) = app.try_state::<VaultState>() {
                     state.lock().unwrap().lock();
                 }
+                clear_clipboard_if_ours(app);
             }
         });
 }
