@@ -18,12 +18,45 @@ cargo tauri dev
 
 ## 二、构建可分发包
 
+### 2.1 当前平台
+
 ```bash
 cargo tauri build
 ```
 
 按当前平台产出安装包（Windows: .msi/.exe；macOS: .app/.dmg；Linux: .deb/.rpm/AppImage）。
 安装包相关配置在 `tauri.conf.json` 的 `bundle` 段（图标、分类等），应用标识符在顶层 `identifier`。
+
+### 2.2 各平台实测结果（2026-11-09，Linux/WSL 主机）
+
+| 平台 | 命令 | 结果 |
+|---|---|---|
+| Linux | `cargo tauri build --bundles deb` | ✅ 产出 `SecurePass_1.0.0_amd64.deb`（6.1 MB） |
+| Linux | `cargo tauri build --bundles appimage` | ❌ 需从 GitHub 下载 AppRun，本机 DNS 不可达 |
+| Linux | `cargo tauri build --bundles rpm` | ❌ 需要 `rpmbuild`（未安装） |
+| Windows x64 | `./scripts/package-win.sh` | ✅ 交叉编译产出便携 zip（cargo-xwin + clang-cl/lld-link） |
+| Windows x64 | `cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc` | ✅ 编译通过；NSIS 安装包需从 GitHub 下载工具，本机不可达 |
+| macOS | 只能在 macOS 主机上 `cargo tauri build` | ⛔ Linux 无法交叉（需 Apple SDK、签名与公证） |
+| FreeBSD | — | ⛔ Tauri 2 官方不支持 |
+
+### 2.3 Windows 打包与 WebView2 选项
+
+```bash
+./scripts/package-win.sh                      # 便携版：依赖系统安装的 WebView2 Runtime
+./scripts/package-win.sh --with-webview2      # 内置固定版 WebView2（默认读 ./.webview2-fixed）
+./scripts/package-win.sh --with-webview2 DIR  # 指定固定版运行时目录
+```
+
+- 固定版运行时从微软 WebView2 页面（Fixed Version）下载并解压，目录内应包含 `msedgewebview2.exe`。
+- 内置模式会额外生成 `SecurePass.cmd`，它设置 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向同目录 `webview2/`，
+  双击该 cmd 启动即可完全离线，不依赖系统是否装过 WebView2。
+- 体积参考：exe 约 12 MB；固定版运行时约 150–200 MB，压缩后 zip 约 60–80 MB。
+
+### 2.4 macOS / FreeBSD
+
+- **macOS**：必须在 macOS 主机上构建。`cargo tauri build` 产出 `.app` / `.dmg`；分发需要开发者证书做签名与公证。
+- **FreeBSD**：Tauri 2 的 `wry`/`tao` 仅支持 linux/windows/macos/android/ios，源码里按 `target_os = "linux"` 分支处理，
+  FreeBSD 不在支持范围，官方无构建路径；如需支持需自行移植 WebView 绑定。
 
 ## 三、数据存放
 
