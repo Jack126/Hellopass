@@ -91,7 +91,7 @@
             </div>
 
             <!-- 密码管理器 -->
-            <PasswordManager v-if="passwordsLoaded" />
+            <PasswordManager v-if="passwordsLoaded" :key="vaultVersion" />
           </div>
         </el-main>
 
@@ -253,20 +253,18 @@
       <div class="import-options" style="margin-top: 16px;">
         <el-form :model="importForm" label-width="80px">
           <el-form-item label="备份文件">
-            <el-upload
-              ref="uploadRef"
-              :auto-upload="false"
-              :on-change="handleFileChange"
-              :limit="1"
+            <div class="spb-picker">
+              <el-button type="primary" @click="spbFileInput?.click()">选择 .spb 文件</el-button>
+              <span v-if="importForm.fileName" class="spb-name">{{ importForm.fileName }}</span>
+              <span v-else class="spb-hint">仅支持本程序加密导出的 .spb 文件</span>
+            </div>
+            <input
+              ref="spbFileInput"
+              type="file"
               accept=".spb"
-            >
-              <el-button type="primary">选择 .spb 文件</el-button>
-              <template #tip>
-                <div class="el-upload__tip">
-                  仅支持本程序加密导出的 .spb 文件
-                </div>
-              </template>
-            </el-upload>
+              style="display: none"
+              @change="handleSpbFileChange"
+            />
           </el-form-item>
         </el-form>
       </div>
@@ -501,6 +499,8 @@ import { authApi, importExportApi, notificationApi, passwordApi, type PasswordEn
 
 // 响应式数据
 const passwordsLoaded = ref(false);
+// 变更后自增，用作 PasswordManager 的 key，强制重新拉取列表
+const vaultVersion = ref(0);
 
 // 主密码设置 / 解锁弹窗状态
 const showAuth = ref(false);
@@ -535,10 +535,10 @@ const exportPasswordConfirm = ref('');
 
 // 导入设置
 const importForm = ref({
-  format: 'json',
   file: null as File | null,
-  duplicateHandling: 'skip',
+  fileName: '',
 });
+const spbFileInput = ref<HTMLInputElement | null>(null);
 
 // 备份文件引用
 const backupFileInput = ref();
@@ -817,16 +817,20 @@ const handleEncryptedExport = async () => {
   }
 };
 
-const handleFileChange = (file: any) => {
-  importForm.value.file = file.raw;
+const handleSpbFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  importForm.value.file = file;
+  importForm.value.fileName = file?.name ?? '';
+  // 清空 input，保证再次选同一个文件也会触发 change
+  input.value = '';
 };
 
 const handleEncryptedImport = async () => {
   if (!importForm.value.file) {
-    notificationApi.showNotification('请选择要导入的 .spb 文件', 'warning');
+    notificationApi.showNotification('请先选择 .spb 文件', 'warning');
     return;
   }
-  const text = await importForm.value.file.text();
   let pwd = '';
   try {
     const res = await ElMessageBox.prompt('请输入该备份的导出密码', '解密备份', {
@@ -844,40 +848,24 @@ const handleEncryptedImport = async () => {
   }
   importing.value = true;
   try {
+    const text = await importForm.value.file.text();
     const result = await importExportApi.importEncrypted(text, pwd);
-    notificationApi.showNotification(
-      '导入完成：新增 ' + result.imported_count + '，跳过 ' + result.skipped_count + '，失败 ' + result.error_count,
-      result.error_count > 0 ? 'warning' : 'success'
-    );
-    importForm.value.file = null;
+    const summary =
+      '导入完成：新增 ' + result.imported_count +
+      '，跳过 ' + result.skipped_count +
+      '，失败 ' + result.error_count;
+    // 全部跳过通常是因为这些条目已在库里，提示得更明确一点
+    const hint =
+      result.imported_count === 0 && result.skipped_count > 0 ? '（条目已存在，无需重复导入）' : '';
+    const level = result.error_count > 0 || result.imported_count === 0 ? 'warning' : 'success';
+    notificationApi.showNotification(summary + hint, level);
+    importForm.value = { file: null, fileName: '' };
     showImportDialog.value = false;
+    // 强制重新挂载 PasswordManager，从后端重新拉取列表
+    vaultVersion.value += 1;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     notificationApi.showNotification('导入失败：' + msg, 'error');
-  } finally {
-    importing.value = false;
-  }
-};
-
-const handleImport = async () => {
-  if (!importForm.value.file) {
-    notificationApi.showNotification('请选择要导入的文件', 'warning');
-    return;
-  }
-
-  importing.value = true;
-  try {
-    const text = await importForm.value.file.text();
-    const result = await importExportApi.importPasswords(text);
-    notificationApi.showNotification(
-      `导入完成：新增 ${result.imported_count}，跳过 ${result.skipped_count}，失败 ${result.error_count}`,
-      result.error_count > 0 ? 'warning' : 'success'
-    );
-    importForm.value.file = null;
-    showImportDialog.value = false;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    notificationApi.showNotification(`导入失败：${msg}`, 'error');
   } finally {
     importing.value = false;
   }
@@ -925,6 +913,7 @@ const handleBackupFile = async (event: Event) => {
     );
     showBackupDialog.value = false;
     passwordsLoaded.value = true;
+    vaultVersion.value += 1;
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
     const msg = error instanceof Error ? error.message : String(error);
@@ -1149,6 +1138,23 @@ const submitAuth = async () => {
 
 .export-options {
   margin-bottom: 20px;
+}
+
+.spb-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.spb-name {
+  color: #303133;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.spb-hint {
+  color: #909399;
+  font-size: 12px;
 }
 
 .export-select {
