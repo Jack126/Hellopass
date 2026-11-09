@@ -1,3 +1,6 @@
+// Release 下用窗口子系统，避免启动时弹出一个控制台窗口
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod security;
 mod database;
 mod api;

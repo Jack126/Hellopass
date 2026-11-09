@@ -7,8 +7,8 @@
 ```
 passwd/
 ├── src/                          # Rust 后端
-│   ├── main.rs                   # securepass CLI 自测入口（无 GUI 依赖）
-│   ├── main_tauri.rs             # securepass_tauri Tauri 2 GUI 入口
+│   ├── main.rs                   # securepass_cli 自测入口（无 GUI 依赖）
+│   ├── main_tauri.rs             # securepass Tauri 2 GUI 入口
 │   ├── security/
 │   │   ├── crypto.rs             # AES-256-GCM + PBKDF2
 │   │   ├── master_password.rs    # 主密码设置/验证/salt 持久化
@@ -122,7 +122,7 @@ passwd/
 
 ### 无头核心测试（无需 GUI 依赖）
 ```bash
-cargo test --bin securepass --no-default-features
+cargo test --bin securepass_cli --no-default-features
 ```
 
 ### 前端构建

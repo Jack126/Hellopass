@@ -21,7 +21,7 @@ run() {
 }
 
 echo "🧪 SecurePass 核心验证（无头）"
-run "核心单元测试" cargo test --bin securepass --no-default-features
+run "核心单元测试" cargo test --bin securepass_cli --no-default-features
 
 # 前端构建（存在依赖时）
 if [ -d frontend/node_modules ]; then

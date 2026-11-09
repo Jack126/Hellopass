@@ -14,7 +14,7 @@ cargo tauri dev
 ```
 
 > Linux 需系统依赖：webkit2gtk-4.1、libdbus-1-dev、librsvg、build-essential 等（详见 Tauri 2 官方文档）。
-> 无 GUI 的无头环境可用 `cargo test --bin securepass --no-default-features` 运行核心单元测试。
+> 无 GUI 的无头环境可用 `cargo test --bin securepass_cli --no-default-features` 运行核心单元测试。
 
 ## 二、构建可分发包
 

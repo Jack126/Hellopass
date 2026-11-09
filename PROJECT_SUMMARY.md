@@ -7,8 +7,8 @@ SecurePass 是基于 Vue 3 + Rust + Tauri 2 的跨平台桌面密码管理器。
 ```
 passwd/
 ├── src/
-│   ├── main.rs                 # securepass：无头自测入口
-│   ├── main_tauri.rs           # securepass_tauri：Tauri 2 GUI 入口
+│   ├── main.rs                 # securepass_cli：无头自测入口
+│   ├── main_tauri.rs           # securepass：Tauri 2 GUI 入口
 │   ├── error.rs                # 统一错误类型 AppError
 │   ├── security/
 │   │   ├── crypto.rs           # AES-256-GCM + PBKDF2
@@ -55,6 +55,6 @@ passwd/
 - 跨设备自动同步（当前用加密备份/恢复实现手工同步）
 
 ## 校验方式
-- 后端：`cargo test --bin securepass --no-default-features`
+- 后端：`cargo test --bin securepass_cli --no-default-features`
 - 前端：`cd frontend && npm run build`
 - 预览：`cd frontend && npm run dev` 后打开 `/preview.html`

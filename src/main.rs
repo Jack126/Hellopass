@@ -1,6 +1,6 @@
 // 说明：本二进制是无头自测/演示入口；api/database/security 等共享模块主要供
-// securepass_tauri 使用。仅编译本二进制时，未被调用的共享项产生 dead_code 警告属预期，
-// 故在此 crate 级关闭该 lint（不影响 securepass_tauri 的诊断）。
+// securepass 使用。仅编译本二进制时，未被调用的共享项产生 dead_code 警告属预期，
+// 故在此 crate 级关闭该 lint（不影响 securepass 的诊断）。
 #![allow(dead_code)]
 
 mod security;

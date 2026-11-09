@@ -17,7 +17,7 @@
 ## ⏳ 未完成（按处理顺序）
 
 ### 1. 真机与打包（当前无头环境阻塞）
-- [ ] 在带 webkit2gtk-4.1 / libdbus-1-dev 的机器编译 securepass_tauri，并 cargo tauri dev 验证窗口/托盘/命令
+- [ ] 在带 webkit2gtk-4.1 / libdbus-1-dev 的机器编译 securepass，并 cargo tauri dev 验证窗口/托盘/命令
 - [ ] cargo tauri build 跨平台打包（Windows / macOS / Linux）
 
 ### 2. 备份加密 / 恢复 ✅
