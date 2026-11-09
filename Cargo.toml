@@ -26,6 +26,11 @@ zeroize = { version = "1", features = ["derive"] }
 # 缺少 webkit2gtk/libdbus 的纯 headless 环境可用
 # `cargo test --bin securepass_cli --no-default-features` 跑核心单元测试。
 tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
+tauri-plugin-global-shortcut = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-clipboard-manager = { version = "2", optional = true }
+pinyin = "0.11"
 
 # GUI 二进制名必须与 package 名一致：Tauri CLI 用 package 名定位主二进制，
 # 名字不一致时 bundler 会把另一个 bin 改名覆盖掉 GUI（之前踩过）。
@@ -43,7 +48,14 @@ tauri-build = { version = "2", optional = true , features = [] }
 
 [features]
 default = ["tauri-app"]
-tauri-app = ["dep:tauri", "dep:tauri-build"]
+tauri-app = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-notification",
+    "dep:tauri-plugin-clipboard-manager",
+]
 
 # 依赖（pbkdf2/sha2/aes-gcm 等）在 dev 下也开优化。
 # 未优化的 600k 次 PBKDF2 单次就要 8 秒左右，登录会卡十几秒。

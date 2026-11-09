@@ -1,4 +1,4 @@
-use crate::api::{NewPassword, PasswordEntry, UpdatePassword, AuditLogEntry, PasswordPolicy};
+use crate::api::{NewPassword, PasswordEntry, UpdatePassword, AuditLogEntry, PasswordPolicy, EntrySummary};
 use crate::database::Database;
 use crate::security::SecureCryptoEngine;
 use base64::Engine;
@@ -162,6 +162,47 @@ impl PasswordOperations {
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         rows.into_iter().map(|r| self.raw_to_entry(r)).collect()
+    }
+
+    /// 列出检索用摘要：只读元数据，不解密任何字段。
+    pub fn list_summaries(&self) -> Result<Vec<EntrySummary>, OperationError> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT id, site_name, site_url, username, tags, category, updated_at, last_accessed, access_count              FROM passwords              ORDER BY COALESCE(last_accessed, updated_at) DESC",
+            )
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let tags_raw: Option<String> = row.get("tags")?;
+                let tags: Vec<String> = tags_raw
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                let site_name: String = row.get("site_name")?;
+                let username: String = row.get("username")?;
+                let initials_src = format!("{} {} {}", site_name, username, tags.join(" "));
+                Ok(EntrySummary {
+                    id: row.get("id")?,
+                    site_name,
+                    site_url: row.get("site_url")?,
+                    username,
+                    tags,
+                    category: row.get("category")?,
+                    updated_at: row.get("updated_at")?,
+                    last_accessed: row.get("last_accessed")?,
+                    access_count: row.get("access_count")?,
+                    pinyin_initials: crate::utils::pinyin::initials(&initials_src),
+                })
+            })
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<EntrySummary>>>()
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+
+        Ok(rows)
     }
 
     /// 按 id 获取单条

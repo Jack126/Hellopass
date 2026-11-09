@@ -492,6 +492,65 @@ impl VaultRuntime {
         result
     }
 
+    /// 启动器检索用摘要：只含元数据，不含任何明文/密文密码。
+    pub fn list_entry_summaries(&mut self) -> ApiResponse<Vec<EntrySummary>> {
+        if !self.enforce_session() {
+            return locked();
+        }
+        let result = self.with_vault(|v| v.list_summaries());
+        if result.success {
+            self.refresh_session();
+        }
+        result
+    }
+
+    /// 当前是否处于解锁会话（未解锁或空闲超时都算锁定）。
+    pub fn is_unlocked(&mut self) -> bool {
+        self.enforce_session()
+    }
+
+    /// 取出要写入剪贴板的字段；返回值由调用方写入剪贴板后立即丢弃。
+    /// 这是唯一会产出密码明文的复制入口，明文不经过前端。
+    pub fn secret_for_copy(&mut self, id: i64, field: &str) -> AppResult<Zeroizing<String>> {
+        if !self.enforce_session() {
+            return Err(AppError::Message("保险库已锁定，请先解锁主密码".to_string()));
+        }
+        let value = {
+            let vault = self
+                .vault
+                .as_ref()
+                .ok_or_else(|| AppError::Message("保险库已锁定，请先解锁主密码".to_string()))?;
+            let entry = vault.get_password(id)?;
+            let (value, action) = match field {
+                "password" => (entry.password.clone().unwrap_or_default(), "copy_password"),
+                "username" => (entry.username.clone(), "copy_username"),
+                _ => return Err(AppError::Message("不支持的复制字段".to_string())),
+            };
+            vault.add_audit_log(action, Some("password"), Some(&id.to_string()), None, true, None);
+            Zeroizing::new(value)
+        };
+        self.refresh_session();
+        Ok(value)
+    }
+
+    /// 详情页显式查看密码：唯一向界面返回明文密码的入口，调用方须在收起时丢弃。
+    pub fn reveal_password(&mut self, id: i64) -> AppResult<Zeroizing<String>> {
+        if !self.enforce_session() {
+            return Err(AppError::Message("保险库已锁定，请先解锁主密码".to_string()));
+        }
+        let value = {
+            let vault = self
+                .vault
+                .as_ref()
+                .ok_or_else(|| AppError::Message("保险库已锁定，请先解锁主密码".to_string()))?;
+            let entry = vault.get_password(id)?;
+            vault.add_audit_log("reveal_password", Some("password"), Some(&id.to_string()), None, true, None);
+            Zeroizing::new(entry.password.clone().unwrap_or_default())
+        };
+        self.refresh_session();
+        Ok(value)
+    }
+
     pub fn update_password(&mut self, password: UpdatePassword) -> ApiResponse<PasswordEntry> {
         if !self.enforce_session() {
             return locked();
@@ -1199,6 +1258,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg);
         let _ = std::fs::remove_file(&db2);
         let _ = std::fs::remove_dir_all(&cfg2);
+    }
+
+    #[test]
+    fn launcher_summaries_never_expose_secrets() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg, db);
+        assert!(rt.setup("StrongPass123!").success);
+        let add = rt.add_password(NewPassword {
+            site_name: "微信".into(),
+            site_url: "https://wx.qq.com".into(),
+            username: "bob".into(),
+            password: "secret-value".into(),
+            notes: Some("private note".into()),
+            tags: Some(vec!["聊天".into()]),
+            category: Some("social".into()),
+            priority: Some(1),
+        });
+        assert!(add.success);
+        let id = add.data.as_ref().unwrap().id.unwrap();
+
+        let res = rt.list_entry_summaries();
+        assert!(res.success, "summaries 失败: {:?}", res.error);
+        let list = res.data.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].site_name, "微信");
+        assert!(list[0].pinyin_initials.contains("wx"), "拼音首字母缺失");
+
+        // 摘要序列化后不能出现任何密码/备注明文或密文字段
+        let json = serde_json::to_string(&list).unwrap();
+        assert!(!json.contains("secret-value"));
+        assert!(!json.contains("private note"));
+        assert!(!json.contains("encrypted_password"));
+
+        // 复制走独立入口；锁定后必须拒绝
+        let copied = rt.secret_for_copy(id, "password").unwrap();
+        assert_eq!(copied.as_str(), "secret-value");
+        rt.lock();
+        assert!(rt.list_entry_summaries().data.is_none());
+        assert!(rt.secret_for_copy(id, "password").is_err());
+        assert!(rt.reveal_password(id).is_err());
     }
 
     #[test]

@@ -59,6 +59,22 @@ pub struct PasswordEntry {
     pub checksum: Option<String>,
 }
 
+/// 启动器列表用的轻量摘要：只含检索和展示所需字段，不含任何密文/明文密码。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntrySummary {
+    pub id: i64,
+    pub site_name: String,
+    pub site_url: String,
+    pub username: String,
+    pub tags: Vec<String>,
+    pub category: String,
+    pub updated_at: String,
+    pub last_accessed: Option<String>,
+    pub access_count: i32,
+    /// 站点名 + 用户名 + 标签的拼音首字母（后端生成，前端直接匹配）
+    pub pinyin_initials: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewPassword {
     pub site_name: String,
