@@ -320,21 +320,43 @@
     >
       <el-form :model="settingsForm" label-width="120px">
         <el-form-item label="主密码">
-          <el-input
-            v-model="settingsForm.masterPassword"
-            type="password"
-            placeholder="设置主密码"
-            show-password
-          />
-          <div class="password-strength">
-            <el-progress 
-              :percentage="settingsPasswordStrength" 
-              :color="settingsPasswordStrengthColor"
-              :show-text="false"
+          <div class="change-master-password">
+            <el-input
+              v-model="oldMasterPassword"
+              type="password"
+              show-password
+              placeholder="当前主密码"
             />
-            <span :class="['strength-text', settingsPasswordStrengthClass]">
-              {{ settingsPasswordStrengthText }}
-            </span>
+            <el-input
+              v-model="newMasterPassword"
+              type="password"
+              show-password
+              placeholder="新主密码：至少 12 位，含大小写字母、数字与符号"
+            />
+            <el-input
+              v-model="confirmMasterPassword"
+              type="password"
+              show-password
+              placeholder="再次输入新主密码"
+            />
+            <div v-if="newMasterPassword" class="password-strength">
+              <el-progress
+                :percentage="newMasterPasswordStrength"
+                :color="newMasterPasswordStrengthColor"
+                :show-text="false"
+              />
+              <span :class="['strength-text', newMasterPasswordStrengthClass]">
+                强度：{{ newMasterPasswordStrengthText }}
+              </span>
+            </div>
+            <el-button
+              type="primary"
+              plain
+              :loading="changingPassword"
+              @click="changeMasterPassword"
+            >
+              修改主密码
+            </el-button>
           </div>
         </el-form-item>
         
@@ -492,9 +514,14 @@ const importForm = ref({
 // 备份文件引用
 const backupFileInput = ref();
 
+// 修改主密码表单
+const oldMasterPassword = ref('');
+const newMasterPassword = ref('');
+const confirmMasterPassword = ref('');
+const changingPassword = ref(false);
+
 // 设置表单
 const settingsForm = ref({
-  masterPassword: '',
   autoLock: true,
   lockTime: 15,
   autoBackup: true,
@@ -503,80 +530,48 @@ const settingsForm = ref({
 });
 
 // 计算属性
-const settingsPasswordStrength = computed(() => {
-  const password = settingsForm.value.masterPassword;
-  if (!password) return 0;
-  
-  let strength = 0;
-  if (password.length >= 8) strength += 25;
-  if (password.length >= 12) strength += 25;
-  if (/[a-z]/.test(password)) strength += 12.5;
-  if (/[A-Z]/.test(password)) strength += 12.5;
-  if (/[0-9]/.test(password)) strength += 12.5;
-  if (/[^a-zA-Z0-9]/.test(password)) strength += 12.5;
-  
-  return Math.min(strength, 100);
-});
+// 主密码规则清单：设置、修改主密码共用（与后端 MasterPasswordManager 一致）
+const passwordRulesFor = (p: string) => [
+  { label: '至少 12 个字符', ok: p.length >= 12 },
+  { label: '包含大写字母 (A-Z)', ok: /[A-Z]/.test(p) },
+  { label: '包含小写字母 (a-z)', ok: /[a-z]/.test(p) },
+  { label: '包含数字 (0-9)', ok: /[0-9]/.test(p) },
+  { label: '包含特殊符号 (!@#$…)', ok: /[^a-zA-Z0-9]/.test(p) },
+];
 
-const settingsPasswordStrengthColor = computed(() => {
-  const strength = settingsPasswordStrength.value;
-  if (strength < 30) return '#f56c6c';
-  if (strength < 70) return '#e6a23c';
+const masterPasswordRules = computed(() => passwordRulesFor(masterPassword.value));
+const newMasterPasswordRules = computed(() => passwordRulesFor(newMasterPassword.value));
+
+const strengthOf = (rules: { ok: boolean }[]) =>
+  Math.round((rules.filter((r) => r.ok).length / rules.length) * 100);
+
+const strengthColor = (strength: number) => {
+  if (strength < 40) return '#f56c6c';
+  if (strength < 100) return '#e6a23c';
   return '#67c23a';
-});
+};
 
-const settingsPasswordStrengthText = computed(() => {
-  const strength = settingsPasswordStrength.value;
-  if (strength < 30) return '弱';
-  if (strength < 70) return '中';
+const strengthText = (strength: number) => {
+  if (strength < 40) return '弱';
+  if (strength < 100) return '中';
   return '强';
-});
+};
 
-const settingsPasswordStrengthClass = computed(() => {
-  const strength = settingsPasswordStrength.value;
-  if (strength < 30) return 'weak';
-  if (strength < 70) return 'medium';
+const strengthClass = (strength: number) => {
+  if (strength < 40) return 'weak';
+  if (strength < 100) return 'medium';
   return 'strong';
-});
+};
 
-// 设置主密码对话框：实时强度反馈与需求清单（与后端 MasterPasswordManager 校验规则一致）
-const masterPasswordRules = computed(() => {
-  const p = masterPassword.value;
-  return [
-    { label: '至少 12 个字符', ok: p.length >= 12 },
-    { label: '包含大写字母 (A-Z)', ok: /[A-Z]/.test(p) },
-    { label: '包含小写字母 (a-z)', ok: /[a-z]/.test(p) },
-    { label: '包含数字 (0-9)', ok: /[0-9]/.test(p) },
-    { label: '包含特殊符号 (!@#$…)', ok: /[^a-zA-Z0-9]/.test(p) },
-  ];
-});
+const newMasterPasswordStrength = computed(() => strengthOf(newMasterPasswordRules.value));
+const newMasterPasswordStrengthColor = computed(() => strengthColor(newMasterPasswordStrength.value));
+const newMasterPasswordStrengthText = computed(() => strengthText(newMasterPasswordStrength.value));
+const newMasterPasswordStrengthClass = computed(() => strengthClass(newMasterPasswordStrength.value));
 
-const masterPasswordStrength = computed(() => {
-  const total = masterPasswordRules.value.length;
-  const ok = masterPasswordRules.value.filter((r) => r.ok).length;
-  return Math.round((ok / total) * 100);
-});
-
-const masterPasswordStrengthColor = computed(() => {
-  const s = masterPasswordStrength.value;
-  if (s < 40) return '#f56c6c';
-  if (s < 100) return '#e6a23c';
-  return '#67c23a';
-});
-
-const masterPasswordStrengthText = computed(() => {
-  const s = masterPasswordStrength.value;
-  if (s < 40) return '弱';
-  if (s < 100) return '中';
-  return '强';
-});
-
-const masterPasswordStrengthClass = computed(() => {
-  const s = masterPasswordStrength.value;
-  if (s < 40) return 'weak';
-  if (s < 100) return 'medium';
-  return 'strong';
-});
+const masterPasswordStrength = computed(() => strengthOf(masterPasswordRules.value));
+const masterPasswordStrengthColor = computed(() => strengthColor(masterPasswordStrength.value));
+const masterPasswordStrengthText = computed(() => strengthText(masterPasswordStrength.value));
+const masterPasswordStrengthClass = computed(() => strengthClass(masterPasswordStrength.value));
 
 // 方法
 const startUsing = () => {
@@ -650,7 +645,9 @@ const lockVault = async (reason = '保险库已锁定') => {
   stopIdleWatch();
   passwordsLoaded.value = false;
   masterPassword.value = '';
-  settingsForm.value.masterPassword = '';
+  oldMasterPassword.value = '';
+  newMasterPassword.value = '';
+  confirmMasterPassword.value = '';
   exportPassword.value = '';
   exportPasswordConfirm.value = '';
   auditLogs.value = [];
@@ -885,6 +882,40 @@ const handleBackupFile = async (event: Event) => {
   }
 };
 
+/// 修改主密码：验证旧密码后由后端用新密钥重加密全部数据
+const changeMasterPassword = async () => {
+  if (!oldMasterPassword.value) {
+    notificationApi.showNotification('请输入当前主密码', 'warning');
+    return;
+  }
+  const missing = newMasterPasswordRules.value.filter((r) => !r.ok).map((r) => r.label);
+  if (missing.length > 0) {
+    notificationApi.showNotification('新主密码强度不足，需满足：' + missing.join('、'), 'warning');
+    return;
+  }
+  if (newMasterPassword.value !== confirmMasterPassword.value) {
+    notificationApi.showNotification('两次输入的新主密码不一致', 'warning');
+    return;
+  }
+  if (newMasterPassword.value === oldMasterPassword.value) {
+    notificationApi.showNotification('新主密码不能与当前主密码相同', 'warning');
+    return;
+  }
+  changingPassword.value = true;
+  try {
+    await authApi.changePassword(oldMasterPassword.value, newMasterPassword.value);
+    oldMasterPassword.value = '';
+    newMasterPassword.value = '';
+    confirmMasterPassword.value = '';
+    notificationApi.showNotification('主密码已修改，请牢记新密码', 'success');
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    notificationApi.showNotification('修改主密码失败：' + msg, 'error');
+  } finally {
+    changingPassword.value = false;
+  }
+};
+
 const saveSettings = async () => {
   savingSettings.value = true;
   try {
@@ -1105,6 +1136,17 @@ const submitAuth = async () => {
 .backup-info ul {
   margin: 5px 0;
   padding-left: 20px;
+}
+
+.change-master-password {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.change-master-password .el-button {
+  align-self: flex-start;
 }
 
 .password-strength {
