@@ -119,14 +119,16 @@ impl Database {
             [],
         )?;
 
-        // 创建密码历史表（仅存明文密码的 SHA-256 哈希，用于防止复用最近使用过的密码；不可逆）
+        // 创建密码历史表：存「用主密钥加密后的历史密码密文」，用于防止复用最近用过的密码。
+        // 早期版本这里存的是明文口令的裸 SHA-256（可被离线爆破），该格式已废弃（见下方迁移）。
         conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS password_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 password_id INTEGER NOT NULL,
                 changed_at TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
+                password_hash TEXT,
+                encrypted_password TEXT,
                 FOREIGN KEY (password_id) REFERENCES passwords(id) ON DELETE CASCADE
             )
             "#,
@@ -142,11 +144,18 @@ impl Database {
         // 兼容旧库：补齐可能缺失的列
         Self::migrate_columns(conn)?;
 
+        // v3：密码历史改为「主密钥加密」。旧版本存的是裸 SHA-256，无法反推也无法转换，
+        // 只能丢弃，避免继续留在库里被离线爆破（幂等：每次打开都顺手清掉历史垃圾）。
+        conn.execute(
+            "DELETE FROM password_history WHERE encrypted_password IS NULL",
+            [],
+        )?;
+
         // 创建索引
         Self::create_indexes(conn)?;
 
         // 记录 schema 版本
-        Self::set_schema_version(conn, 2)?;
+        Self::set_schema_version(conn, 3)?;
 
         Ok(())
     }
@@ -178,6 +187,10 @@ impl Database {
         for (name, ddl) in audit_cols.iter() {
             Self::ensure_column(conn, "audit_logs", name, ddl)?;
         }
+
+        // 旧库的 password_history 没有加密列；password_hash 上的 NOT NULL 无法直接去掉，
+        // 新代码会写空串占位、只使用 encrypted_password。
+        Self::ensure_column(conn, "password_history", "encrypted_password", "encrypted_password TEXT")?;
         Ok(())
     }
 
@@ -390,7 +403,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_priority, 1);
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 3);
 
         let _ = std::fs::remove_file(&db_path);
     }

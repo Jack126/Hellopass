@@ -41,6 +41,14 @@ impl KeyManager {
         Ok(Self { crypto_engine, created_at })
     }
 
+    /// 用已派生好的引擎直接构造（改密时避免重复做 PBKDF2）。
+    pub fn from_engine(crypto_engine: SecureCryptoEngine) -> Self {
+        Self {
+            crypto_engine,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
     pub fn get_crypto_engine(&self) -> &SecureCryptoEngine {
         &self.crypto_engine
     }

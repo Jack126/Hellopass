@@ -164,6 +164,11 @@ impl MasterPasswordManager {
     }
 
     pub fn validate_password_strength_inner(&self, password: &str) -> bool {
+        Self::password_is_strong(password)
+    }
+
+    /// 主密码准入规则（与 UI 提示保持一致）：≥12 字符且含大小写、数字、特殊字符。
+    pub fn password_is_strong(password: &str) -> bool {
         if password.len() < 12 {
             return false;
         }
@@ -174,20 +179,49 @@ impl MasterPasswordManager {
         has_upper && has_lower && has_digit && has_special
     }
 
+    /// 原子写配置：先写同目录临时文件并 fsync，再 rename 覆盖。
+    /// 这样任何时刻崩溃，磁盘上都只会是「完整旧配置」或「完整新配置」，
+    /// 不会出现被截断的配置导致保险库永久无法打开。
     fn save_config(&self, config: &MasterPasswordConfig) -> Result<(), MasterPasswordError> {
         let config_json = serde_json::to_string(config)?;
-        let mut file = File::create(&self.config_path)?;
-        file.write_all(config_json.as_bytes())?;
-        // 配置文件含 salt 与主密码验证令牌，权限收紧为 0600
-        #[cfg(unix)]
+        let path = Path::new(&self.config_path);
+        let tmp_path = path.with_extension("json.tmp");
         {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = std::fs::metadata(&self.config_path) {
-                let mut perms = metadata.permissions();
-                perms.set_mode(0o600);
-                let _ = std::fs::set_permissions(&self.config_path, perms);
+            let mut file = File::create(&tmp_path)?;
+            file.write_all(config_json.as_bytes())?;
+            file.sync_all()?;
+            // 配置文件含 salt 与主密码验证令牌，权限收紧为 0600
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&tmp_path) {
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o600);
+                    let _ = std::fs::set_permissions(&tmp_path, perms);
+                }
             }
         }
+        std::fs::rename(&tmp_path, path)?;
+        Ok(())
+    }
+
+    /// 用「已派生好的新密钥」替换主密码配置（改密流程使用）。
+    ///
+    /// 调用方负责先用旧密钥把数据重加密到新密钥；本方法只做最后一步的原子落盘，
+    /// 因此落盘失败时磁盘上仍是旧配置，配合调用方的回滚即可回到一致状态。
+    pub fn rotate_to(&mut self, engine: SecureCryptoEngine) -> Result<(), MasterPasswordError> {
+        let token_ct = engine
+            .encrypt(VERIFY_TOKEN)
+            .map_err(|_| MasterPasswordError::StorageCorrupted)?;
+        let config = MasterPasswordConfig {
+            created_at: chrono::Utc::now().to_rfc3339(),
+            algorithm: "AES-256-GCM".to_string(),
+            iterations: engine.get_iterations(),
+            salt: engine.get_salt().to_vec(),
+            verify_token: base64::engine::general_purpose::STANDARD.encode(&token_ct),
+        };
+        self.save_config(&config)?;
+        self.key_manager = Some(KeyManager::from_engine(engine));
         Ok(())
     }
 

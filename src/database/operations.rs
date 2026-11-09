@@ -3,7 +3,6 @@ use crate::database::Database;
 use crate::security::SecureCryptoEngine;
 use base64::Engine;
 use chrono::Utc;
-use sha2::{Sha256, Digest};
 use thiserror::Error;
 use crate::utils::log;
 
@@ -240,6 +239,10 @@ impl PasswordOperations {
 
     /// 删除密码
     pub fn delete_password(&self, id: i64) -> Result<(), OperationError> {
+        // 未开启 PRAGMA foreign_keys，需要显式清理历史记录，避免残留已删除条目的密文
+        let _ = self
+            .conn()
+            .execute("DELETE FROM password_history WHERE password_id = ?1", rusqlite::params![id]);
         let affected = self.conn().execute("DELETE FROM passwords WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         if affected == 0 {
@@ -266,25 +269,24 @@ impl PasswordOperations {
         Ok((ok, checksum, size))
     }
 
-    fn hash_password(plaintext: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(plaintext.as_bytes());
-        format!("{:x}", hasher.finalize())
-    }
-
-    /// 新密码是否命中该条目最近的历史密码（只比较 SHA-256，不落明文）。
+    /// 新密码是否命中该条目最近的历史密码。
+    ///
+    /// 历史密码用主密钥加密存储，只有解锁后才能比对；即使拿到 db 文件，
+    /// 也无法像旧的裸 SHA-256 那样离线爆破。
     fn is_password_reused(&self, password_id: i64, plaintext: &str) -> Result<bool, OperationError> {
-        let hash = Self::hash_password(plaintext);
         let mut stmt = self
             .conn()
-            .prepare("SELECT password_hash FROM password_history WHERE password_id = ?1")
+            .prepare(
+                "SELECT encrypted_password FROM password_history \
+                 WHERE password_id = ?1 AND encrypted_password IS NOT NULL",
+            )
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         let rows = stmt
             .query_map(rusqlite::params![password_id], |r| r.get::<_, String>(0))
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         for row in rows {
             let stored = row.map_err(|e| OperationError::DatabaseError(e.to_string()))?;
-            if stored == hash {
+            if self.decrypt_from_b64(&stored)? == plaintext {
                 return Ok(true);
             }
         }
@@ -292,12 +294,15 @@ impl PasswordOperations {
     }
 
     fn record_password_history(&self, password_id: i64, plaintext: &str) {
-        let hash = Self::hash_password(plaintext);
         let ts = Utc::now().to_rfc3339();
-        let _ = self.conn().execute(
-            "INSERT INTO password_history (password_id, changed_at, password_hash) VALUES (?1,?2,?3)",
-            rusqlite::params![password_id, ts, hash],
-        );
+        // password_hash 是旧版本遗留列（NOT NULL），只写空串占位，不再存任何哈希。
+        if let Ok(enc) = self.encrypt_to_b64(plaintext) {
+            let _ = self.conn().execute(
+                "INSERT INTO password_history (password_id, changed_at, password_hash, encrypted_password) \
+                 VALUES (?1,?2,'',?3)",
+                rusqlite::params![password_id, ts, enc],
+            );
+        }
         self.prune_password_history(password_id);
     }
 
@@ -441,7 +446,15 @@ impl PasswordOperations {
     }
 
     /// 主密码更换时，用旧密钥解密每条目、用当前（新）密钥重新加密并写回。
+    ///
+    /// 整个重加密在单个事务里完成：任一条目失败都会整体回滚，
+    /// 不会留下「一半旧密钥、一半新密钥」的库。
     pub fn rekey(&self, old_crypto: &SecureCryptoEngine) -> Result<(), OperationError> {
+        let tx = self
+            .conn()
+            .unchecked_transaction()
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+
         for (id, enc_pwd, enc_notes) in self.get_encrypted_rows()? {
             let old_ct = base64::engine::general_purpose::STANDARD
                 .decode(&enc_pwd)
@@ -472,11 +485,50 @@ impl PasswordOperations {
                 None => None,
             };
 
-            self.conn().execute(
+            tx.execute(
                 "UPDATE passwords SET encrypted_password=?1, encrypted_notes=?2 WHERE id=?3",
                 rusqlite::params![new_enc, new_enc_notes, id],
             ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         }
+
+        // 历史密码同样由主密钥加密，必须一起换成新密钥
+        let history: Vec<(i64, String)> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, encrypted_password FROM password_history \
+                     WHERE encrypted_password IS NOT NULL",
+                )
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<(i64, String)>>>()
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+            rows
+        };
+        for (id, enc) in history {
+            let ct = base64::engine::general_purpose::STANDARD
+                .decode(&enc)
+                .map_err(|_| OperationError::DecryptError)?;
+            let plain = old_crypto
+                .decrypt(&ct)
+                .map_err(|_| OperationError::DecryptError)?;
+            let new_ct = self
+                .crypto
+                .encrypt(&plain)
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+            tx.execute(
+                "UPDATE password_history SET encrypted_password=?1 WHERE id=?2",
+                rusqlite::params![
+                    base64::engine::general_purpose::STANDARD.encode(new_ct),
+                    id
+                ],
+            )
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        }
+
+        tx.commit()
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         Ok(())
     }
 
@@ -668,6 +720,21 @@ mod tests {
             matches!(reuse, Err(OperationError::ValidationError(_))),
             "reusing a historical password must be blocked, got {:?}",
             reuse.map(|e| e.id)
+        );
+
+        // 历史密码必须以密文存储：不能再是可被离线爆破的裸 SHA-256
+        let stored: String = ops
+            .conn()
+            .query_row(
+                "SELECT encrypted_password FROM password_history WHERE password_id = ?1 LIMIT 1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .expect("history row");
+        assert!(
+            stored.chars().any(|c| !c.is_ascii_hexdigit()),
+            "历史密码不能以裸哈希存储: {}",
+            stored
         );
     }
 

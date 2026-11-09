@@ -27,6 +27,13 @@ fn to_response<T>(result: AppResult<T>) -> ApiResponse<T> {
 /// 审计日志默认保留天数。
 const AUDIT_RETENTION_DAYS: i64 = 90;
 
+/// 失败计数与锁定截止时间：需要落盘，否则重启应用就能重置 5 次失败锁定。
+#[derive(Serialize, Deserialize, Default)]
+struct LockoutState {
+    failed_attempts: u32,
+    lockout_until: Option<String>,
+}
+
 /// 将条目渲染为 CSV（首行表头），供全量/多选导出复用。
 fn entries_to_csv(entries: &[PasswordEntry]) -> String {
     let mut buf = String::new();
@@ -105,6 +112,43 @@ impl VaultRuntime {
         self.config_dir.to_str().unwrap_or(".")
     }
 
+    fn lockout_state_path(&self) -> PathBuf {
+        self.config_dir.join("lockout_state.json")
+    }
+
+    /// 从磁盘恢复失败计数与锁定截止时间（重启应用不能绕过锁定）。
+    fn load_lockout_state(&mut self) {
+        let Ok(content) = std::fs::read_to_string(self.lockout_state_path()) else {
+            return;
+        };
+        let Ok(state) = serde_json::from_str::<LockoutState>(&content) else {
+            return;
+        };
+        self.failed_attempts = state.failed_attempts;
+        self.lockout_until = state
+            .lockout_until
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+    }
+
+    fn save_lockout_state(&self) {
+        let state = LockoutState {
+            failed_attempts: self.failed_attempts,
+            lockout_until: self.lockout_until.map(|t| t.to_rfc3339()),
+        };
+        if let Ok(json) = serde_json::to_string(&state) {
+            let path = self.lockout_state_path();
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+
+    fn clear_lockout_state(&self) {
+        let _ = std::fs::remove_file(self.lockout_state_path());
+    }
+
     /// 是否已设置主密码（依据配置文件是否存在）。
     pub fn is_set(&self) -> bool {
         MasterPasswordManager::new(self.dir()).is_set()
@@ -124,6 +168,7 @@ impl VaultRuntime {
         let crypto = mgr.get_crypto_engine()?.clone();
         let database = Database::new(&self.db_path)?;
         self.vault = Some(PasswordOperations::new(database, crypto));
+        self.clear_lockout_state();
         Ok(())
     }
 
@@ -133,6 +178,8 @@ impl VaultRuntime {
         if !self.is_set() {
             return ApiResponse::err_message("主密码尚未设置");
         }
+        // 先从磁盘恢复失败计数/锁定截止时间，重启应用不能绕过锁定
+        self.load_lockout_state();
         // 已处于锁定状态
         if let Some(t) = self.lockout_until {
             if Utc::now() < t {
@@ -144,6 +191,7 @@ impl VaultRuntime {
             // 锁定已过期，重置失败计数允许重试
             self.lockout_until = None;
             self.failed_attempts = 0;
+            self.clear_lockout_state();
         }
         // 完整性基线校验（在打开数据库前读取文件，避免受连接影响）
         let baseline_warning = self.verify_baseline();
@@ -186,6 +234,7 @@ impl VaultRuntime {
                 };
                 self.failed_attempts = 0;
                 self.lockout_until = None;
+                self.clear_lockout_state();
                 self.vault = Some(PasswordOperations::new(db, crypto));
                 self.last_activity = Some(Utc::now());
                 // 解锁成功后按保留策略清理过期审计日志（best-effort）
@@ -203,6 +252,7 @@ impl VaultRuntime {
                 if self.failed_attempts >= self.max_attempts {
                     self.lockout_until = Some(Utc::now() + self.lockout_duration);
                 }
+                self.save_lockout_state();
                 log::warn("runtime", &format!("主密码验证失败（第 {} 次）", self.failed_attempts));
                 ApiResponse::err_message(format!("主密码错误: {}", e))
             }
@@ -241,14 +291,41 @@ impl VaultRuntime {
         let mut old_mgr = MasterPasswordManager::new(dir);
         old_mgr.verify_password(old_password)?;
         let old_crypto = old_mgr.get_crypto_engine()?.clone();
-        let mut new_mgr = MasterPasswordManager::new(dir);
-        new_mgr.set_master_password(new_password)?;
-        let new_crypto = new_mgr.get_crypto_engine()?.clone();
+
+        if !MasterPasswordManager::password_is_strong(new_password) {
+            return Err(AppError::Message(
+                "主密码强度不足：至少 12 位，且需包含大小写字母、数字和特殊字符".to_string(),
+            ));
+        }
+
+        // 新密钥先只派生在内存里（随机 salt），数据库全部重加密成功后才落盘配置。
+        // 顺序很关键：配置一旦先写，旧密码立刻失效，任何中途失败都会把库锁死。
+        let new_crypto = SecureCryptoEngine::new(new_password, None)?;
         let database = Database::new(&self.db_path)?;
-        let ops = PasswordOperations::new(database, new_crypto);
-        ops.rekey(&old_crypto)?;
+        let ops = PasswordOperations::new(database, new_crypto.clone());
+        ops.rekey(&old_crypto)?; // 单事务：失败则整体回滚，旧密码仍可打开
+
+        // 最后一步原子替换配置；失败则把数据重加密回旧密钥（磁盘上仍是旧配置）
+        if let Err(e) = MasterPasswordManager::new(dir).rotate_to(new_crypto.clone()) {
+            let rollback = Database::new(&self.db_path)
+                .map_err(AppError::from)
+                .and_then(|db| {
+                    PasswordOperations::new(db, old_crypto.clone())
+                        .rekey(&new_crypto)
+                        .map_err(AppError::from)
+                });
+            if let Err(rb) = rollback {
+                log::error(
+                    "runtime",
+                    &format!("改密回滚失败，数据库可能处于混合密钥状态: {}", rb),
+                );
+            }
+            return Err(e.into());
+        }
+
         self.failed_attempts = 0;
         self.lockout_until = None;
+        self.clear_lockout_state();
         self.vault = Some(ops);
         self.last_activity = Some(Utc::now());
         if let Some(v) = &self.vault {
@@ -1480,6 +1557,131 @@ mod tests {
         let imp2 = rt.import_passwords(csv);
         assert!(imp2.success, "csv import: {:?}", imp2.error);
         assert_eq!(imp2.data.as_ref().unwrap().imported_count, 1);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn history_survives_password_change() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        let add = rt.add_password(NewPassword {
+            site_name: "example.com".into(),
+            site_url: "https://example.com".into(),
+            username: "alice".into(),
+            password: "hist-pass".into(),
+            notes: None,
+            tags: None,
+            category: None,
+            priority: None,
+        });
+        let id = add.data.as_ref().unwrap().id.unwrap();
+        let upd = rt.update_password(UpdatePassword {
+            id,
+            site_name: None,
+            site_url: None,
+            username: None,
+            password: Some("second-pass".into()),
+            notes: None,
+            tags: None,
+            category: None,
+            priority: None,
+        });
+        assert!(upd.success);
+
+        let ch = rt.change_password("StrongPass123!", "NewStrongPass456!");
+        assert!(ch.success, "change 失败: {:?}", ch.error);
+
+        // 历史密文必须随主密钥一起重加密，改密后仍能拦截复用
+        let reuse = rt.update_password(UpdatePassword {
+            id,
+            site_name: None,
+            site_url: None,
+            username: None,
+            password: Some("hist-pass".into()),
+            notes: None,
+            tags: None,
+            category: None,
+            priority: None,
+        });
+        assert!(!reuse.success, "改密后仍应拦截历史密码复用");
+
+        let mut rt_new = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(rt_new.unlock("NewStrongPass456!").success);
+        let got = rt_new.get_password(id);
+        assert_eq!(
+            got.data.as_ref().and_then(|e| e.password.clone()).as_deref(),
+            Some("second-pass")
+        );
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn lockout_survives_restart() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        for i in 0..5 {
+            let res = rt.unlock("WrongPass123!");
+            assert!(!res.success, "第 {} 次错误尝试应失败", i + 1);
+        }
+        assert!(!rt.unlock("StrongPass123!").success, "达到上限后应锁定");
+
+        // 新实例（模拟重启应用）不能再靠重置内存绕过锁定
+        let mut rt2 = VaultRuntime::new(cfg.clone(), db.clone());
+        let res = rt2.unlock("StrongPass123!");
+        assert!(!res.success, "重启后锁定必须仍然生效");
+        assert!(
+            res.error.unwrap_or_default().contains("已锁定"),
+            "应返回锁定提示"
+        );
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn failed_rekey_keeps_old_password_valid() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        let add = rt.add_password(NewPassword {
+            site_name: "example.com".into(),
+            site_url: "https://example.com".into(),
+            username: "alice".into(),
+            password: "secret-value".into(),
+            notes: None,
+            tags: None,
+            category: None,
+            priority: None,
+        });
+        let id = add.data.as_ref().unwrap().id.unwrap();
+
+        // 把密文改成能被 base64 解码、但 GCM 认证必然失败的内容
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            let garbage = base64::engine::general_purpose::STANDARD.encode([0u8; 40]);
+            conn.execute(
+                "UPDATE passwords SET encrypted_password=?1 WHERE id=?2",
+                rusqlite::params![garbage, id],
+            )
+            .unwrap();
+        }
+
+        let ch = rt.change_password("StrongPass123!", "NewStrongPass456!");
+        assert!(!ch.success, "重加密失败时改密必须报错");
+
+        // 关键：配置没有被提前替换，旧密码仍能解锁，新密码不行
+        let mut old = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(old.unlock("StrongPass123!").success, "回滚后旧密码必须仍可用");
+        let mut new = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(!new.unlock("NewStrongPass456!").success, "失败的新密码不应生效");
+
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
     }
