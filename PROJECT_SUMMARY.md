@@ -1,171 +1,59 @@
 # SecurePass 项目总结
 
-## 项目概述
-SecurePass 是一个基于 Vue 前端和 Rust 后端的密码管理器，采用 Tauri 框架构建跨平台桌面应用。
+## 概述
+SecurePass 是基于 Vue 3 + Rust + Tauri 2 的跨平台桌面密码管理器。密码使用 AES-256-GCM 加密，主密钥由 PBKDF2-HMAC-SHA256（600,000 次）派生。
 
 ## 项目结构
 ```
-/home/jack/projects/passwd/
-├── frontend/                 # Vue.js 前端
-│   ├── src/
-│   │   ├── components/      # Vue 组件
-│   │   ├── views/          # 页面视图
-│   │   ├── store/          # Vuex 状态管理
-│   │   └── utils/          # 工具函数
-│   ├── public/
-│   └── package.json
-├── src/                     # Rust 后端
-│   ├── main.rs             # 主程序入口
-│   ├── main_simple.rs      # 简化版本（已测试通过）
-│   ├── api/                # API 接口模块
-│   │   ├── mod.rs
-│   │   ├── commands.rs     # 密码操作命令
-│   │   ├── auth.rs         # 认证相关
-│   │   └── import_export.rs # 导入导出
-│   ├── database/           # 数据库模块
-│   │   ├── mod.rs
-│   │   ├── models.rs
-│   │   ├── connection.rs
-│   │   └── operations.rs
-│   ├── security/           # 安全模块
-│   │   ├── mod.rs
-│   │   ├── crypto.rs       # 加密算法
-│   │   ├── master_password.rs # 主密码管理
-│   │   └── key_management.rs # 密钥管理
-│   └── utils/              # 工具模块
-├── Cargo.toml              # Rust 依赖配置
-├── tauri.conf.json         # Tauri 配置文件（待创建）
-└── README.md
+passwd/
+├── src/
+│   ├── main.rs                 # securepass：无头自测入口
+│   ├── main_tauri.rs           # securepass_tauri：Tauri 2 GUI 入口
+│   ├── error.rs                # 统一错误类型 AppError
+│   ├── security/
+│   │   ├── crypto.rs           # AES-256-GCM + PBKDF2
+│   │   ├── master_password.rs  # 主密码/salt/验证令牌
+│   │   ├── key_management.rs   # 密钥管理
+│   │   └── policies.rs         # 密码强度评估
+│   ├── database/
+│   │   ├── mod.rs              # 初始化/迁移/schema 版本/统计/文件校验
+│   │   ├── operations.rs       # CRUD/审计/历史/过期/备份加解密
+│   │   └── schema.sql          # 建表脚本（文档）
+│   ├── api/
+│   │   ├── dto.rs              # ApiResponse + DTO
+│   │   ├── runtime.rs          # VaultRuntime（无 Tauri 依赖）
+│   │   └── mod.rs
+│   └── utils/log.rs            # 统一日志
+├── frontend/                   # Vue 3 + Element Plus
+│   └── src/
+│       ├── App.vue             # 主密码/导入导出/备份/设置/安全概览
+│       ├── components/PasswordManager.vue
+│       ├── components/PasswordList.vue
+│       ├── api/index.ts        # Tauri invoke 封装
+│       └── dev-mock.ts         # 仅开发预览用 mock
+├── icons/  assets/  capabilities/
+├── tauri.conf.json             # Tauri 2 配置
+└── Cargo.toml
 ```
 
-## 当前状态
+## 已完成
+- 加密与主密码：AES-256-GCM；PBKDF2 600k；salt 持久化；改密 rekey
+- 数据库：SQLite；CRUD；审计；密码历史（5 条防复用）；过期（90 天）；schema 迁移与版本
+- 会话安全：30 分钟空闲超时；5 次失败锁定 30 分钟
+- 审计：操作落库 + 解锁时清理 90 天前记录
+- 导入导出：JSON/CSV；多选导出；导入去重统计
+- 备份：自包含加密备份包，可跨安装恢复
+- 完整性：SQLite integrity_check + DB/配置 SHA-256 + 锁定基线比对
+- Tauri 2：VaultRuntime + Mutex；命令；窗口/托盘；v2 配置 + 图标 + capabilities
+- 前端：设置/解锁、列表、增删改、搜索、导入导出、备份、安全概览、密码生成器
+- 工程：AppError 统一错误（运行时边界已采用）；24 个单测/集成/安全测试通过；securepass bin 0 警告
+- CI：`.github/workflows/ci.yml` 三平台矩阵（backend tests / frontend build / tauri build）
 
-### ✅ 已完成
-1. **安全模块整合** - 将 `securepass/src/` 的安全模块整合到主 `src/` 目录
-2. **API 模块创建** - 创建了完整的 API 接口模块结构
-3. **简化版本测试** - `main_simple.rs` 成功编译并运行
-4. **数据库模块** - 完整的 SQLite 数据库操作
-5. **加密模块** - AES-256-CTR 加密实现
-6. **依赖管理** - 修复了版本兼容性问题
+## 未完成
+- 真机 / CI 实际运行验证（配置已就绪，需推送触发 GitHub Actions）
+- 跨设备自动同步（当前用加密备份/恢复实现手工同步）
 
-### 🔄 进行中
-1. **修复编译错误** - 原始完整版本仍有编译错误需要修复
-2. **API 序列化** - 修复了 DateTime 序列化问题
-
-### ⏳ 待完成
-1. **Tauri 配置** - 创建 `tauri.conf.json` 配置文件
-2. **前后端集成** - 连接 Vue 前端和 Rust 后端
-3. **完整测试** - 完整功能测试和错误处理
-4. **部署准备** - 打包和发布配置
-
-## 核心功能
-
-### 🔐 安全特性
-- **AES-256-CTR 加密** - 使用 AES-CTR 模式加密密码
-- **PBKDF2 密钥派生** - 使用 PBKDF2-HMAC-SHA256 派生密钥
-- **主密码管理** - 主密码强度验证和存储
-- **密钥管理** - 安全的密钥生成和存储
-
-### 🗄️ 数据库功能
-- **SQLite 存储** - 使用 SQLite 存储加密的密码条目
-- **CRUD 操作** - 创建、读取、更新、删除密码
-- **搜索功能** - 支持按名称、标签、分类搜索
-- **备份恢复** - 数据库备份和恢复功能
-
-### 🌐 API 接口
-- **密码管理** - 添加、获取、更新、删除密码
-- **认证功能** - 登录、登出、密码强度验证
-- **导入导出** - JSON、CSV 格式的导入导出
-- **统计信息** - 密码使用统计和分析
-
-## 测试结果
-
-### ✅ 简化版本测试通过
-```
-🔒 SecurePass - 简化版本
-====================
-密码 '123': ❌ 无效
-密码 'password': ❌ 无效
-密码 '123456': ❌ 无效
-密码 'SecurePass123': ✅ 有效
-
-🔧 测试密码管理功能:
-✅ 添加密码: github.com - user123
-📋 密码列表 (1 个):
-  - github.com: user123
-🗑️ 删除密码: 成功
-📋 剩余密码 (0 个):
-
-✅ 简化版本测试完成！
-```
-
-### 🔄 完整版本状态
-- **编译错误**: 仍有部分编译错误需要修复
-- **模块依赖**: 需要修复模块间的依赖关系
-- **错误处理**: 需要完善错误处理机制
-
-## 下一步计划
-
-### 🎯 短期目标（1-2 天）
-1. **修复编译错误** - 解决完整版本的编译问题
-2. **API 完善** - 完善错误处理和数据验证
-3. **测试覆盖** - 添加单元测试和集成测试
-
-### 🎯 中期目标（1 周）
-1. **Tauri 集成** - 添加 Tauri 支持和配置
-2. **前端连接** - 连接 Vue 前端和 Rust 后端
-3. **功能测试** - 完整功能测试和优化
-
-### 🎯 长期目标（2-4 周）
-1. **性能优化** - 优化加密性能和数据库操作
-2. **UI 优化** - 改进用户界面和用户体验
-3. **发布准备** - 打包和发布配置
-
-## 技术栈
-
-### 前端
-- **Vue.js 3** - 前端框架
-- **Element Plus** - UI 组件库
-- **Vuex** - 状态管理
-- **Vue Router** - 路由管理
-
-### 后端
-- **Rust** - 主要编程语言
-- **Tauri** - 桌面应用框架
-- **SQLite** - 数据库
-- **Tokio** - 异步运行时
-- **Serde** - 序列化/反序列化
-- **AES** - 加密算法
-
-### 开发工具
-- **Cargo** - Rust 包管理器
-- **npm** - Node.js 包管理器
-- **Git** - 版本控制
-- **VS Code** - 开发环境
-
-## 部署计划
-
-### 开发环境
-- 使用 `cargo run` 运行 Rust 后端
-- 使用 `npm run serve` 运行 Vue 前端
-- 使用 `npm run dev` 运行完整应用
-
-### 生产环境
-- 使用 `cargo build --release` 构建后端
-- 使用 `npm run build` 构建前端
-- 使用 Tauri 打包成桌面应用
-
-## 注意事项
-
-1. **安全性** - 确保所有密码数据都经过加密
-2. **性能** - 优化加密算法和数据库操作
-3. **用户体验** - 确保界面友好和操作流畅
-4. **错误处理** - 完善的错误处理和用户反馈
-5. **测试覆盖** - 充分的测试确保功能可靠性
-
-## 联系信息
-
-如有问题或建议，请通过以下方式联系：
-- 项目路径: `/home/jack/projects/passwd`
-- 开发者: AI Assistant
-- 更新时间: 2024年
+## 校验方式
+- 后端：`cargo test --bin securepass --no-default-features`
+- 前端：`cd frontend && npm run build`
+- 预览：`cd frontend && npm run dev` 后打开 `/preview.html`

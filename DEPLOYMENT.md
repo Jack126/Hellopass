@@ -1,167 +1,42 @@
 # SecurePass 部署指南
 
-## 🚀 部署概述
+SecurePass 是基于 Tauri 2 的跨平台**桌面**密码管理器。打包与分发使用 Tauri 官方流程，早期仓库中的多 bin / Docker / Web 部署方式已废弃删除。
 
-SecurePass 是一个基于 Vue + Rust + Tauri 的桌面密码管理器应用，支持多种部署方式。
+## 一、开发运行
 
-## 📋 系统要求
-
-### 开发环境
-- **Rust**: 1.70+
-- **Node.js**: 18+
-- **npm**: 8+
-- **Tauri CLI**: 1.5+
-- **操作系统**: Windows 10+, macOS 10.14+, Ubuntu 18.04+
-
-### 生产环境
-- **操作系统**: Windows 10+, macOS 10.14+, Ubuntu 18.04+
-- **内存**: 至少 512MB RAM
-- **存储**: 至少 100MB 可用空间
-- **网络**: 可选（用于备份同步）
-
-## 🛠️ 开发环境搭建
-
-### 1. 克隆项目
 ```bash
-git clone https://github.com/your-username/securepass.git
-cd securepass
+# 1. 安装 Tauri CLI（v2）
+cargo install tauri-cli --version ^2.0.0
+
+# 2. 安装前端依赖并启动开发
+cd frontend && npm install && cd ..
+cargo tauri dev
 ```
 
-### 2. 安 Rust 后端
+> Linux 需系统依赖：webkit2gtk-4.1、libdbus-1-dev、librsvg、build-essential 等（详见 Tauri 2 官方文档）。
+> 无 GUI 的无头环境可用 `cargo test --bin securepass --no-default-features` 运行核心单元测试。
+
+## 二、构建可分发包
+
 ```bash
-# 安装 Rust (如果尚未安装)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# 添加 Tauri 工具链
-cargo install tauri-cli
-
-# 构建后端
-cargo build --release
+cargo tauri build
 ```
 
-### 3. 安前端依赖
-```bash
-cd frontend
-npm install
-cd ..
-```
+按当前平台产出安装包（Windows: .msi/.exe；macOS: .app/.dmg；Linux: .deb/.rpm/AppImage）。
+安装包相关配置在 `tauri.conf.json` 的 `bundle` 段（图标、分类等），应用标识符在顶层 `identifier`。
 
-### 4. 开发模式运行
-```bash
-# 后端开发模式
-cargo run --bin securepass_complete
+## 三、数据存放
 
-# 前端开发模式
-cd frontend
-npm run dev
-```
+- 数据库与配置位于各平台的应用数据目录（由 `app.path().app_data_dir()` 解析）。
+- 仓库根目录遗留的 `securepass.db` / `backup.db` 为本地运行产物，建议加入 `.gitignore`，不要提交。
 
-## 🏗️ 构建和打包
+## 四、已移除的旧部署方式（仅供参考）
 
-### Web 版本构建
-```bash
-cd frontend
-npm run build
-```
+以下文件已不再适用并从仓库删除：
+- `scripts/build-{linux,macos,windows,freebsd}.sh`、`scripts/build-all.sh`（针对不存在的 `securepass_complete` CLI）
+- `build/` 目录（AppImage / 便携式打包脚本与旧二进制）
+- `Dockerfile`、`Dockerfile.simple`、`docker-compose.yml`、`nginx.conf`、`monitoring/`（Web 容器化部署）
+- `Cargo_simple.toml`、`Cargo_full.toml`（历史变体清单）
+- `DEPLOYMENT-GUIDE.md` 中的 CLI 子命令（add/list/search/backup/restore）用法
 
-### 桌面应用构建
-```bash
-# 构建所有平台
-cd frontend
-npm run tauri:build
-
-# 构建特定平台
-npm run tauri:build:win   # Windows
-npm run tauri:build:mac   # macOS
-npm run tauri:build:linux # Linux
-```
-
-### 构建产物
-- **Web 版本**: `frontend/dist/`
-- **桌面应用**: `frontend/src-tauri/target/release/`
-
-## 📦 部署选项
-
-### 1. Web 部署
-```bash
-# 部署到静态网站托管
-cd frontend/dist
-# 使用 GitHub Pages, Netlify, Vercel 等平台部署
-```
-
-### 2. 桌面应用部署
-```bash
-# Windows
-cd frontend/src-tauri/target/release
-# 创建安装程序
-.\securepass.exe
-
-# macOS
-cd frontend/src-tauri/target/release
-# 创建 DMG
-sudo create-dmg --volname "SecurePass" --volicon "../icons.icns" --window-pos 200 120 --window-size 600 300 --icon-size 100 --icon "securepass.app" 175 120 --hide-extension "securepass.app" securepass.dmg
-
-# Linux
-cd frontend/src-tauri/target/release
-# 创建 DEB 包
-dpkg-deb -b securepass.deb
-```
-
-### 3. 容器化部署
-```bash
-# 构建容器
-docker build -t securepass .
-
-# 运行容器
-docker run -d -p 8080:8080 securepass
-```
-
-## 🔧 配置文件
-
-### Tauri 配置
-```json
-{
-  "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:3000",
-    "distDir": "../dist"
-  },
-  "package": {
-    "productName": "SecurePass",
-    "version": "1.0.0"
-  },
-  "tauri": {
-    "bundle": {
-      "active": true,
-      "category": "Productivity",
-      "copyright": "Copyright © 2024 SecurePass Team",
-      "deb": {
-        "depends": ["libgtk-3-0", "libayatana-appindicator3-1", "libwebkit2gtk-4.0-37"]
-      },
-      "externalBin": [],
-      "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"],
-      "identifier": "com.securepass.app",
-      "longDescription": "A secure password manager with encryption and synchronization.",
-      "macOS": {
-        "entitlements": "entitlements.plist",
-        "exceptionDomain": "",
-        "providerShortName": "SecurePass",
-        "signingIdentity": "Developer ID Application: SecurePass Team"
-      },
-      "resources": [],
-      "shortDescription": "SecurePass - Secure Password Manager",
-      "targets": "all",
-      "windows": {
-        "certificateThumbprint": "",
-        "digestAlgorithm": "sha256",
-        "timestampUrl": ""
-      }
-    },
-    "security": {
-      "csp": "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
-    },
-    "updater": {
-      "active": false,
-      "dialog": true,
-      "pubkey": "1DNi7yQdOQD4A6M7MqJ3fF7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7yZ7
+Tauri 2 的权限由 `capabilities/` 下的能力文件控制（当前为 `capabilities/default.json`，含 `core:default`）；图标位于 `icons/`，打包资源位于 `assets/`。

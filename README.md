@@ -1,202 +1,152 @@
 # SecurePass 密码管理器
 
-跨平台密码管理器，采用 Vue + Rust + Tauri 架构，注重安全性，支持企业内部使用。
+跨平台密码管理器，采用 Vue 3 + Rust + Tauri 2 架构；密码使用 AES-256-GCM 加密，主密钥由 PBKDF2-HMAC-SHA256（600,000 次迭代）从主密码派生。
 
 ## 📁 项目结构
 
 ```
 passwd/
 ├── src/                          # Rust 后端
-│   ├── main.rs                   # Tauri 主入口
-│   ├── security/                 # 安全模块
-│   │   ├── mod.rs
-│   │   ├── crypto.rs             # 加密算法
-│   │   ├── master_password.rs   # 主密码管理
-│   │   └── policies.rs           # 安全策略
-│   ├── database/                 # 数据库模块
-│   │   ├── mod.rs
-│   │   ├── models.rs             # 数据模型
-│   │   └── schema.sql            # 数据库结构
-│   ├── api/                      # API 接口
-│   │   ├── mod.rs
-│   │   ├── commands.rs           # 命令处理
-│   │   ├── import_export.rs       # 导入导出
-│   │   └── auth.rs               # 认证模块
-│   └── utils/                    # 工具函数
-├── frontend/                     # Vue 前端
-│   ├── src/
-│   │   ├── components/           # Vue 组件
-│   │   │   ├── PasswordList.vue
-│   │   │   ├── PasswordCard.vue
-│   │   │   ├── AddPasswordDialog.vue
-│   │   │   ├── ExportDialog.vue
-│   │   │   └── SettingsDialog.vue
-│   │   ├── stores/               # Pinia 状态管理
-│   │   ├── utils/                # 工具函数
-│   │   └── types/                # TypeScript 类型
-│   ├── public/
-│   └── package.json
-├── tauri.conf.json               # Tauri 配置
-├── Cargo.toml                   # Rust 依赖
-├── todo.md                       # 开发任务列表
-├── README.md                     # 项目说明
-└── security-architecture.md      # 安全架构设计
+│   ├── main.rs                   # securepass CLI 自测入口（无 GUI 依赖）
+│   ├── main_tauri.rs             # securepass_tauri Tauri 2 GUI 入口
+│   ├── security/
+│   │   ├── crypto.rs             # AES-256-GCM + PBKDF2
+│   │   ├── master_password.rs    # 主密码设置/验证/salt 持久化
+│   │   ├── key_management.rs     # 密钥管理
+│   │   └── policies.rs           # 密码强度评估
+│   ├── database/
+│   │   ├── mod.rs                # 数据库初始化/建表/统计
+│   │   ├── operations.rs         # 加解密 CRUD、审计、历史、过期
+│   │   └── schema.sql            # 建表脚本（文档用途）
+│   ├── api/
+│   │   ├── dto.rs                # 请求/响应 DTO
+│   │   ├── runtime.rs            # VaultRuntime：会话安全/CRUD/导入导出/审计
+│   │   └── mod.rs
+│   └── utils/
+│       ├── app_state.rs          # CLI 用的简单状态
+│       └── log.rs                # 统一日志
+├── frontend/                     # Vue 3 + Element Plus
+│   └── src/
+│       ├── App.vue               # 主密码弹窗、导入/导出、设置
+│       ├── components/
+│       │   ├── PasswordManager.vue
+│       │   └── PasswordList.vue
+│       ├── api/index.ts          # Tauri invoke 封装
+│       └── main.ts
+├── icons/                        # 应用/托盘图标（png/ico/icns）
+├── assets/                       # 打包资源
+├── capabilities/default.json     # Tauri 2 权限
+├── tauri.conf.json               # Tauri 2 配置
+├── Cargo.toml
+├── todo.md
+└── README.md
 ```
 
-## 🎯 核心功能
+## ✅ 已实现功能
 
-### ✅ 已完成
-- [x] 功能逻辑点梳理
-- [x] 安全架构设计
-- [x] 加密算法选择（AES-256-GCM + PBKDF2-HMAC-SHA256）
-- [x] 数据库架构设计
-- [x] API接口设计
-- [x] 主密码系统设计
-- [x] 导入导出机制设计
+### 加密与主密码
+- AES-256-GCM 认证加密（防篡改）
+- PBKDF2-HMAC-SHA256，600,000 次迭代
+- salt 持久化 + 验证令牌校验主密码
+- 修改主密码时用旧密钥解密、新密钥重加密（rekey）
 
-### 🔄 开发中
-- [ ] Rust 后端核心功能实现
-- [ ] Vue 前端界面开发
-- [ ] Tauri 应用集成
-- [ ] 安全测试和优化
+### 数据库与 CRUD
+- SQLite（rusqlite），落库前加密、读取时解密
+- 增/查全部/按 id 查/模糊搜索/更新/删除
+- 数据库文件权限 0600
 
-### ⏳ 待开发
+### 会话安全
+- 30 分钟空闲超时自动锁定
+- 5 次错误尝试锁定 30 分钟
+- 解锁/锁定/失败均写入审计日志
 
-#### 1. 核心模块开发
-- [ ] **Rust 后端**
-  - [ ] 加密模块实现 (`src/security/crypto.rs`)
-  - [ ] 主密码管理 (`src/security/master_password.rs`)
-  - [ ] 数据库操作 (`src/database/`)
-  - [ ] API 接口 (`src/api/`)
-  - [ ] 错误处理和日志
+### 审计日志
+- `audit_logs` 记录 unlock/lock/add/update/delete/change_master_password
+- 提供 `get_audit_logs` 查询（最近 200 条）
 
-- [ ] **Vue 前端**
-  - [ ] 手动输入密码界面 (`AddPasswordDialog.vue`)
-  - [ ] 多选导出界面 (`ExportDialog.vue`)
-  - [ ] 密码列表显示 (`PasswordList.vue`)
-  - [ ] 密码强度检测
-  - [ ] 搜索和过滤功能
+### 密码策略
+- 强度评估（长度、大小写、数字、特殊字符、常见弱口令）
+- 过期提醒：默认最长 90 天，提供到期清单
+- 历史记录：记住最近 5 次密码，禁止复用
 
-- [ ] **Tauri 集成**
-  - [ ] 配置文件 (`tauri.conf.json`)
-  - [ ] 跨平台打包
-  - [ ] 系统集成（文件关联、快捷方式）
+### 导入导出
+- JSON / CSV 导出（支持多选条目）；不选则导出全部
+- 导入自动识别 JSON/CSV，按 站点名+用户名 去重，返回统计
 
-#### 2. 安全功能
-- [ ] **完整性校验**
-  - [ ] 文件完整性检查
-  - [ ] 运行时完整性验证
-  - [ ] 防篡改机制
+### 备份与完整性
+- 加密备份：自包含备份包（内嵌 salt/iterations），可跨安装用同一主密码恢复
+- 完整性检查：SQLite integrity_check + 数据库/配置文件 SHA-256（安全概览可触发）
+- 运行时基线：正常锁定写入 DB 文件哈希，下次解锁比对并告警
+- 数据迁移：`schema_meta` 版本记录 + 启动时补齐旧库缺失列
+- 密码生成器：`crypto.getRandomValues` 生成 16 位强随机密码
 
-- [ ] **审计日志**
-  - [ ] 操作记录
-  - [ ] 安全事件检测
-  - [ ] 异常行为告警
+### 前端
+- 主密码设置/解锁弹窗
+- 密码列表、新增/编辑/删除、搜索、分类
+- 导入（读文件）/ 导出（Blob 下载，json/csv）
 
-- [ ] **密码策略**
-  - [ ] 密码强度验证
-  - [ ] 密码过期提醒
-  - [ ] 密码历史记录
+### Tauri 2
+- `VaultRuntime` 以 `Mutex` 注入，暴露 19 个命令
+- 程序化创建主窗口 + 系统托盘
+- 配置为 Tauri 2 结构，含图标与 capabilities
 
-#### 3. 导入导出功能
-- [ ] **CSV 导入**
-  - [ ] 格式验证
-  - [ ] 批量导入
-  - [ ] 错误处理
+### 工程与测试
+- 24 个单元 / 集成 / 安全测试（密文篡改、错误密钥、错误主密码、错误备份密码）
+- 统一错误类型 `AppError`（运行时边界已采用，错误统一记日志）
+- GitHub Actions 三平台 CI（后端测试 / 前端构建 / Tauri 打包）
 
-- [ ] **加密导出**
-  - [ ] 多选导出
-  - [ ] 导出文件格式
-  - [ ] 导入验证
+## ⏳ 尚未完成（按处理顺序）
+1. 真机 / CI 实际运行验证（`github/workflows/ci.yml` 已配置三平台矩阵，需推送触发）
+2. 跨设备自动同步（当前用加密备份/恢复实现手工迁移）
+3. 更大规模的模糊测试 / 渗透测试
 
-- [ ] **数据迁移**
-  - [ ] 老版本数据迁移
-  - [ ] 跨设备同步
-  - [ ] 备份恢复
-
-## 🔐 安全特性
-
-### 加密算法
-- **主加密**: AES-256-GCM
-- **密钥派生**: PBKDF2-HMAC-SHA256 (100,000 次迭代)
-- **哈希算法**: SHA-256
-- **密钥长度**: 256 位 (32 字节)
-
-### 数据存储
-- **明文字段**: 网站名称、URL、用户名
-- **加密字段**: 密码、备注
-- **数据库**: SQLite
-- **文件权限**: 600 (仅所有者可读写)
-
-### 安全策略
-- **主密码**: 最小 12 位，必须包含大小写字母、数字、特殊字符
-- **会话管理**: 30 分钟超时，5 次错误尝试锁定
-- **审计日志**: 记录所有操作，保留 90 天
-- **备份加密**: 所有备份数据加密存储
+## 🔐 安全参数
+- 主加密：AES-256-GCM
+- 密钥派生：PBKDF2-HMAC-SHA256（600,000 次）
+- 密钥长度：256 位
+- 明文存储：网站名称、URL、用户名；密码与备注加密存储
+- 文件权限：600
+- 主密码：最少 12 位，含大小写、数字、特殊字符
+- 会话：30 分钟超时，5 次失败锁定
+- 密码历史：5 条；过期：90 天
 
 ## 🚀 快速开始
 
 ### 环境要求
-- **Rust**: 1.70+
-- **Node.js**: 18+
-- **Vue**: 3+
-- **Tauri**: 1.5+
+- Rust 1.70+
+- Node.js 18+
+- Tauri 2 CLI（真机开发/打包）
+- Linux 需 `webkit2gtk-4.1` 与 `libdbus-1-dev`
 
-### 安装依赖
+### 无头核心测试（无需 GUI 依赖）
 ```bash
-# Rust 依赖
-cargo install tauri-cli
-
-# Node.js 依赖
-cd frontend
-npm install
-cd ..
-
-# Tauri 依赖
-cargo install tauri-cli --version 1.5
+cargo test --bin securepass --no-default-features
 ```
 
-### 开发模式
+### 前端构建
 ```bash
-# 启动前端开发服务器
 cd frontend
-npm run dev
+npm install
+npm run build
+```
 
-# 启动 Tauri 开发服务器
-cd ..
+### 桌面开发（需 GUI 依赖）
+```bash
+npm install --prefix frontend
+cargo install tauri-cli --version ^2.0.0
 cargo tauri dev
 ```
 
-### 构建应用
+### 打包
 ```bash
-# 构建所有平台
 cargo tauri build
-
-# 构建特定平台
-cargo tauri build --target x86_64-pc-windows-msvc
-cargo tauri build --target x86_64-apple-darwin
-cargo tauri build --target x86_64-unknown-linux-gnu
 ```
 
-## 📋 开发任务
-
-详细的开发任务列表请参考 `todo.md` 文件。
-
 ## 📝 文档
-
 - [安全架构设计](security-architecture.md)
+- [部署指南](DEPLOYMENT.md)
+- [项目总结](PROJECT_SUMMARY.md)
 - [开发任务列表](todo.md)
-- [API 接口文档](docs/api.md)
-- [部署指南](docs/deployment.md)
-
-## 📞 联系方式
-
-如有问题或建议，请通过以下方式联系：
-- 项目仓库: [GitHub Repository]
-- 问题反馈: [Issues]
-- 开发讨论: [Discussions]
 
 ---
-
-*最后更新: 2024-01-15*
-*维护者: 开发团队*
+最后更新：2026-10-20
