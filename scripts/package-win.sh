@@ -92,17 +92,22 @@ EOF
 else
 cat >> "$OUT/README.txt" <<'EOF'
 双击 SecurePass.exe。
+程序常驻系统托盘，不会弹出主窗口。
 运行需要系统已安装 WebView2 Runtime（Win11 及较新 Win10 已内置）。
 EOF
 fi
 cat >> "$OUT/README.txt" <<'EOF'
 
-2. 首次启动会要求设置主密码：至少 12 位，含大小写字母、数字和特殊字符
-3. 之后每次启动输入该主密码解锁
+1. 按 Ctrl+Alt+Space 唤出搜索窗（可在托盘「设置…」里自由改键）
+   输入即搜，↑↓ 选择，Enter 复制密码，Ctrl+Enter 复制用户名，
+   → 查看详情，Ctrl+N 新建，Esc 收起
+2. 托盘菜单：搜索 / 立即锁定 / 导入密码… / 导出密码… / 设置… / 退出
+3. 首次启动会要求设置主密码：至少 12 位，含大小写字母、数字和特殊字符
 
 【数据位置】
 %APPDATA%\com.securepass.app\securepass.db
 %APPDATA%\com.securepass.app\config\master_password_config.json
+%APPDATA%\com.securepass.app\config\hotkey.json
 内容以 AES-256-GCM 加密，主密钥由主密码经 PBKDF2-HMAC-SHA256（600,000 次）派生。
 
 【系统要求】
