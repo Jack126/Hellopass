@@ -4,6 +4,7 @@ use crate::security::SecureCryptoEngine;
 use base64::Engine;
 use chrono::Utc;
 use thiserror::Error;
+use zeroize::Zeroizing;
 use crate::utils::log;
 
 /// 记住的历史密码条数：更新密码时不能与最近这么多次使用过的密码相同。
@@ -67,7 +68,8 @@ impl PasswordOperations {
         Ok(base64::engine::general_purpose::STANDARD.encode(ct))
     }
 
-    fn decrypt_from_b64(&self, b64: &str) -> Result<String, OperationError> {
+    /// 解密并返回会自动清零的字符串：临时明文不会以普通 String 形式残留在堆上。
+    fn decrypt_from_b64(&self, b64: &str) -> Result<Zeroizing<String>, OperationError> {
         let ct = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|_| OperationError::DecryptError)?;
@@ -75,7 +77,16 @@ impl PasswordOperations {
             .crypto
             .decrypt(&ct)
             .map_err(|_| OperationError::DecryptError)?;
-        String::from_utf8(plain).map_err(|_| OperationError::DecryptError)
+        match String::from_utf8(plain) {
+            Ok(s) => Ok(Zeroizing::new(s)),
+            Err(e) => {
+                // 非 UTF-8 时也要先把字节抹掉再返回
+                let mut bytes = e.into_bytes();
+                use zeroize::Zeroize;
+                bytes.zeroize();
+                Err(OperationError::DecryptError)
+            }
+        }
     }
 
     /// 用当前主密钥加密任意字节并返回 base64（用于加密备份）。
@@ -206,14 +217,14 @@ impl PasswordOperations {
                 PASSWORD_HISTORY_LIMIT
             )));
         }
-        let password_plain = if password_changed {
+        let password_plain = Zeroizing::new(if password_changed {
             submitted_password
         } else {
             current.password.unwrap_or_default()
-        };
+        });
         let notes_plain = p.notes.or(current.notes);
 
-        let enc_pwd = self.encrypt_to_b64(&password_plain)?;
+        let enc_pwd = self.encrypt_to_b64(password_plain.as_str())?;
         let enc_notes = match notes_plain {
             Some(n) => Some(self.encrypt_to_b64(&n)?),
             None => None,
@@ -229,7 +240,7 @@ impl PasswordOperations {
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         if password_changed {
-            let _ = self.record_password_history(p.id, &password_plain);
+            let _ = self.record_password_history(p.id, password_plain.as_str());
         }
 
         self.get_password(p.id)
@@ -284,7 +295,8 @@ impl PasswordOperations {
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         for row in rows {
             let stored = row.map_err(|e| OperationError::DatabaseError(e.to_string()))?;
-            if self.decrypt_from_b64(&stored)? == plaintext {
+            let history_plain = self.decrypt_from_b64(&stored)?;
+            if history_plain.as_str() == plaintext {
                 return Ok(true);
             }
         }
@@ -457,12 +469,14 @@ impl PasswordOperations {
             let old_ct = base64::engine::general_purpose::STANDARD
                 .decode(&enc_pwd)
                 .map_err(|_| OperationError::DecryptError)?;
-            let plain = old_crypto
-                .decrypt(&old_ct)
-                .map_err(|_| OperationError::DecryptError)?;
+            let plain = Zeroizing::new(
+                old_crypto
+                    .decrypt(&old_ct)
+                    .map_err(|_| OperationError::DecryptError)?,
+            );
             let new_ct = self
                 .crypto
-                .encrypt(&plain)
+                .encrypt(plain.as_slice())
                 .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
             let new_enc = base64::engine::general_purpose::STANDARD.encode(new_ct);
 
@@ -471,9 +485,11 @@ impl PasswordOperations {
                     let ct = base64::engine::general_purpose::STANDARD
                         .decode(&e)
                         .map_err(|_| OperationError::DecryptError)?;
-                    let p = old_crypto
-                        .decrypt(&ct)
-                        .map_err(|_| OperationError::DecryptError)?;
+                    let p = Zeroizing::new(
+                        old_crypto
+                            .decrypt(&ct)
+                            .map_err(|_| OperationError::DecryptError)?,
+                    );
                     let n = self
                         .crypto
                         .encrypt(p.as_slice())
@@ -508,12 +524,14 @@ impl PasswordOperations {
             let ct = base64::engine::general_purpose::STANDARD
                 .decode(&enc)
                 .map_err(|_| OperationError::DecryptError)?;
-            let plain = old_crypto
-                .decrypt(&ct)
-                .map_err(|_| OperationError::DecryptError)?;
+            let plain = Zeroizing::new(
+                old_crypto
+                    .decrypt(&ct)
+                    .map_err(|_| OperationError::DecryptError)?,
+            );
             let new_ct = self
                 .crypto
-                .encrypt(&plain)
+                .encrypt(plain.as_slice())
                 .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
             tx.execute(
                 "UPDATE password_history SET encrypted_password=?1 WHERE id=?2",
@@ -551,9 +569,10 @@ impl PasswordOperations {
     }
 
     fn raw_to_entry(&self, r: RawRow) -> Result<PasswordEntry, OperationError> {
-        let password = self.decrypt_from_b64(&r.encrypted_password)?;
+        // DTO 需要 String，这里只能复制一份；临时缓冲区本身由 Zeroizing 负责清零
+        let password = self.decrypt_from_b64(&r.encrypted_password)?.to_string();
         let notes = match r.encrypted_notes {
-            Some(ref e) => Some(self.decrypt_from_b64(e)?),
+            Some(ref e) => Some(self.decrypt_from_b64(e)?.to_string()),
             None => None,
         };
         let tags = r.tags

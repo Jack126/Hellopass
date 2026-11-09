@@ -18,6 +18,8 @@ rusqlite = { version = "0.28", features = ["bundled"] }
 pbkdf2 = "0.11"
 hmac = "0.12"
 base64 = "0.21"
+# 敏感内存清零（主密钥、解密后的明文缓冲区）
+zeroize = { version = "1", features = ["derive"] }
 # Tauri 是桌面应用的核心依赖。它仅在构建 securepass 二进制时需要，
 # 因此放在可选的 tauri-app 特性后并设为默认特性，
 # 这样 `cargo tauri dev` / `cargo build` 开箱即用，无需手动加 --features。

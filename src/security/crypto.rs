@@ -7,6 +7,7 @@ use hmac::Hmac;
 use sha2::{Sha256, Digest};
 use rand::RngCore;
 use base64::Engine;
+use zeroize::Zeroize;
 use thiserror::Error;
 
 /// PBKDF2 迭代次数（OWASP 2023 对 PBKDF2-HMAC-SHA256 的建议下限为 600,000）。
@@ -176,9 +177,16 @@ impl SecureCryptoEngine {
 
     /// 安全清除内存中的敏感数据
     pub fn secure_wipe(buffer: &mut [u8]) {
-        for byte in buffer.iter_mut() {
-            *byte = 0;
-        }
+        buffer.zeroize();
+    }
+}
+
+/// 引擎销毁时擦除主密钥，避免密钥在内存中残留。
+/// （salt 不是秘密，但一起清掉没有副作用。）
+impl Drop for SecureCryptoEngine {
+    fn drop(&mut self) {
+        self.master_key.zeroize();
+        self.salt.zeroize();
     }
 }
 

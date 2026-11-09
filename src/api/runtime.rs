@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use chrono::{Duration, DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use base64::Engine;
+use zeroize::Zeroizing;
 use crate::api::dto::*;
 use crate::database::Database;
 use crate::database::operations::{PasswordOperations, OperationError};
@@ -699,10 +700,12 @@ impl VaultRuntime {
         let blob = base64::engine::general_purpose::STANDARD
             .decode(&pkg.data)
             .map_err(|_| AppError::Message("备份数据损坏".to_string()))?;
-        let plain = engine
-            .decrypt(&blob)
-            .map_err(|_| AppError::Message("导出密码错误或数据被篡改".to_string()))?;
-        let entries: Vec<PasswordEntry> = serde_json::from_slice(&plain)?;
+        let plain = Zeroizing::new(
+            engine
+                .decrypt(&blob)
+                .map_err(|_| AppError::Message("导出密码错误或数据被篡改".to_string()))?,
+        );
+        let entries: Vec<PasswordEntry> = serde_json::from_slice(plain.as_slice())?;
         let vault = self
             .vault
             .as_ref()
@@ -741,10 +744,12 @@ impl VaultRuntime {
         let ct = base64::engine::general_purpose::STANDARD
             .decode(&pkg.data)
             .map_err(|_| AppError::Message("备份数据损坏".to_string()))?;
-        let plain = engine
-            .decrypt(&ct)
-            .map_err(|_| AppError::Message("备份密码错误或数据被篡改".to_string()))?;
-        let entries: Vec<PasswordEntry> = serde_json::from_slice(&plain)?;
+        let plain = Zeroizing::new(
+            engine
+                .decrypt(&ct)
+                .map_err(|_| AppError::Message("备份密码错误或数据被篡改".to_string()))?,
+        );
+        let entries: Vec<PasswordEntry> = serde_json::from_slice(plain.as_slice())?;
         let vault = self
             .vault
             .as_ref()

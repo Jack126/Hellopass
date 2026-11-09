@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use base64::Engine;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// 用于验证主密码的常量令牌：设置时用主密钥加密后持久化，验证时解密比对。
 /// 这样既验证了密码正确性，也保证 salt 与主密码对应（GCM 认证会拒绝错误密码或被篡改数据）。
@@ -89,10 +90,13 @@ impl MasterPasswordManager {
 
         let token_ct = base64::engine::general_purpose::STANDARD.decode(&config.verify_token)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
-        let plaintext = engine.decrypt(&token_ct)
-            .map_err(|_| MasterPasswordError::IncorrectPassword)?;
+        let plaintext = Zeroizing::new(
+            engine
+                .decrypt(&token_ct)
+                .map_err(|_| MasterPasswordError::IncorrectPassword)?,
+        );
 
-        if plaintext != VERIFY_TOKEN {
+        if plaintext.as_slice() != VERIFY_TOKEN {
             return Err(MasterPasswordError::IncorrectPassword);
         }
 

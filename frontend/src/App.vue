@@ -668,33 +668,43 @@ const stopIdleWatch = () => {
   }
 };
 
-/// 锁定保险库：卸载 PasswordManager 以销毁内存中的明文，再要求重新输入主密码
-const lockVault = async (reason = '保险库已锁定') => {
-  if (!passwordsLoaded.value) return;
-  stopIdleWatch();
-  passwordsLoaded.value = false;
+/// 锁定/退出时统一清空所有可能持有明文或敏感上下文的界面状态。
+/// 新增任何明文相关的 ref，必须在这里登记，否则锁定时会残留。
+const clearSensitiveState = () => {
   masterPassword.value = '';
   oldMasterPassword.value = '';
   newMasterPassword.value = '';
   confirmMasterPassword.value = '';
   exportPassword.value = '';
   exportPasswordConfirm.value = '';
+  exportCandidates.value = [];
+  exportSelectedIds.value = [];
+  importForm.value = { file: null, fileName: '' };
   auditLogs.value = [];
   expiringPasswords.value = [];
   integrityReport.value = null;
   passwordPolicy.value = null;
+  authError.value = '';
   showSecurityDialog.value = false;
   showExportDialog.value = false;
   showImportDialog.value = false;
   showBackupDialog.value = false;
   showSettingsDialog.value = false;
+};
+
+/// 锁定保险库：卸载 PasswordManager（销毁其内部明文）并清空界面状态
+const lockVault = async (reason = '保险库已锁定') => {
+  if (!passwordsLoaded.value) return;
+  stopIdleWatch();
+  // 组件卸载会释放它持有的条目列表与明文
+  passwordsLoaded.value = false;
+  clearSensitiveState();
   try {
     await authApi.logout();
   } catch {
     // 后端可能已因空闲超时自行锁定
   }
   authMode.value = 'unlock';
-  authError.value = '';
   showAuth.value = true;
   notificationApi.showNotification(reason, 'warning');
 };
