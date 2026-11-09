@@ -668,7 +668,14 @@ onMounted(() => {
 }
 
 .search-input {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0; /* 允许收缩，否则会被下拉框挤成 66px */
+}
+
+/* el-select 默认 width:100%，在 flex 行里会把输入框挤到只剩几十像素 */
+.search-bar :deep(.el-select) {
+  flex: 0 0 130px;
+  width: 130px;
 }
 
 .password-list {
