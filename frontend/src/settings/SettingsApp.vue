@@ -54,11 +54,13 @@
             <p class="muted">
               {{ capturedDisplay ? `将设置为 ${capturedDisplay}` : '请按下新的组合键（至少带 Ctrl / Alt / Shift，F1~F24 可单独使用）' }}
             </p>
+            <p v-if="availabilityMsg" class="muted warn-text">{{ availabilityMsg }}</p>
             <div v-if="capturedAccel" class="actions">
               <button :disabled="savingHotkey" @click="saveHotkey">保存</button>
             </div>
             <p class="muted">录制期间两个热键都会临时注销；按 Esc 取消。</p>
           </template>
+          <p v-if="conflictHint" class="muted warn-text">{{ conflictHint }}</p>
         </div>
 
         <div class="card">
@@ -181,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { listen, request } from '../shared/ipc';
 
 interface Integrity { sqlite_ok: boolean; db_size: number; baseline_ok: boolean; db_checksum: string }
@@ -206,7 +208,10 @@ const noticeKind = ref<'ok' | 'bad'>('ok');
 
 const autoLock = ref(0);
 const wakeDisplay = ref('Ctrl + Alt + Space');
-const lockDisplay = ref('Ctrl + Alt + L');
+const lockDisplay = ref('Ctrl + Shift + L');
+const wakeAccel = ref('control+alt+space');
+const lockAccel = ref('control+shift+l');
+const availabilityMsg = ref('');
 const recordingKind = ref<'wake' | 'lock' | null>(null);
 const capturedAccel = ref('');
 const capturedDisplay = ref('');
@@ -244,7 +249,51 @@ interface HotkeyInfo {
 function applyHotkeyInfo(info: HotkeyInfo) {
   wakeDisplay.value = info.wake_display;
   lockDisplay.value = info.lock_display;
+  wakeAccel.value = info.wake;
+  lockAccel.value = info.lock;
 }
+
+/// 把 "Ctrl+Alt+L" / "control+alt+l" 统一成排序后的 modifier+key 形式。
+function canonical(accel: string): string {
+  const parts = accel
+    .toLowerCase()
+    .split('+')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const alias: Record<string, string> = { control: 'ctrl', win: 'super', meta: 'super' };
+  const mods: string[] = [];
+  const keys: string[] = [];
+  for (const p of parts) {
+    const m = alias[p] ?? p;
+    if (['ctrl', 'alt', 'shift', 'super'].includes(m)) mods.push(m);
+    else keys.push(m);
+  }
+  mods.sort();
+  return [...mods, ...keys].join('+');
+}
+
+const KNOWN_CONFLICTS: Record<string, string> = {
+  'alt+ctrl+l': 'QQ 的「锁定 QQ」',
+  'alt+ctrl+a': 'QQ 的截图',
+  'alt+ctrl+w': '微信的「打开微信」',
+  'alt+a': '微信截图',
+};
+
+function knownConflict(accel: string): string {
+  return KNOWN_CONFLICTS[canonical(accel)] ?? '';
+}
+
+const conflictHint = computed(() => {
+  if (recordingKind.value && capturedAccel.value) {
+    const who = knownConflict(capturedAccel.value);
+    return who ? `${capturedDisplay.value} 通常是 ${who}，可能被抢占` : '';
+  }
+  const w = knownConflict(wakeAccel.value);
+  if (w) return `当前唤醒热键 ${wakeDisplay.value} 通常是 ${w}`;
+  const l = knownConflict(lockAccel.value);
+  if (l) return `当前锁定热键 ${lockDisplay.value} 通常是 ${l}`;
+  return '';
+});
 
 async function loadHotkey() {
   const info = await guard(() => request<HotkeyInfo>('get_hotkey'));
@@ -254,6 +303,7 @@ async function loadHotkey() {
 function startRecord(kind: 'wake' | 'lock') {
   capturedAccel.value = '';
   capturedDisplay.value = '';
+  availabilityMsg.value = '';
   error.value = '';
   recordingKind.value = kind;
   void request('begin_hotkey_capture');
@@ -265,6 +315,7 @@ function stopRecord(restore: boolean) {
   window.removeEventListener('keydown', onRecordKey, true);
   window.removeEventListener('blur', onRecordBlur);
   recordingKind.value = null;
+  availabilityMsg.value = '';
   if (restore) void request('end_hotkey_capture');
 }
 
@@ -295,6 +346,22 @@ function onRecordKey(e: KeyboardEvent) {
   capturedAccel.value = [...mods, token].join('+');
   capturedDisplay.value = [...mods.map((m) => (m === 'Super' ? 'Win' : m)), prettyToken(token)].join(' + ');
   error.value = '';
+  void checkAvailability(capturedAccel.value);
+}
+
+async function checkAvailability(accel: string) {
+  const kind = recordingKind.value;
+  if (!kind) return;
+  try {
+    const res = await request<{ available: boolean; reason?: string | null }>(
+      'check_hotkey_available',
+      { kind, accelerator: accel }
+    );
+    if (capturedAccel.value !== accel) return;
+    availabilityMsg.value = res.available ? '' : res.reason || '该组合不可用，请换一个';
+  } catch (e) {
+    availabilityMsg.value = (e as Error).message;
+  }
 }
 
 async function saveHotkey() {
@@ -302,6 +369,14 @@ async function saveHotkey() {
   if (!kind) return;
   savingHotkey.value = true;
   try {
+    const check = await request<{ available: boolean; reason?: string | null }>(
+      'check_hotkey_available',
+      { kind, accelerator: capturedAccel.value }
+    );
+    if (!check.available) {
+      error.value = check.reason || '该组合不可用，请换一个';
+      return;
+    }
     const info = await request<HotkeyInfo>('set_hotkey', {
       kind,
       accelerator: capturedAccel.value,

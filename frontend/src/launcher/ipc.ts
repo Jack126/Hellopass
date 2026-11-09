@@ -7,7 +7,6 @@ export interface Summary {
   site_url: string;
   username: string;
   tags: string[];
-  category: string;
   updated_at: string;
   last_accessed: string | null;
   access_count: number;
@@ -21,7 +20,6 @@ export interface EntryDetail {
   username: string;
   notes: string | null;
   tags: string[];
-  category: string;
   created_at: string;
   updated_at: string;
   last_accessed: string | null;
@@ -35,7 +33,6 @@ export interface NewPassword {
   password: string;
   notes?: string;
   tags?: string[];
-  category?: string;
   priority?: number;
 }
 

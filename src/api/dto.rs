@@ -53,7 +53,6 @@ pub struct PasswordEntry {
     pub last_accessed: Option<String>,
     pub access_count: i32,
     pub tags: Vec<String>,
-    pub category: String,
     pub priority: i32,
     pub metadata: Option<String>,
     pub checksum: Option<String>,
@@ -67,7 +66,6 @@ pub struct EntrySummary {
     pub site_url: String,
     pub username: String,
     pub tags: Vec<String>,
-    pub category: String,
     pub updated_at: String,
     pub last_accessed: Option<String>,
     pub access_count: i32,
@@ -84,7 +82,6 @@ pub struct EntryDetail {
     pub username: String,
     pub notes: Option<String>,
     pub tags: Vec<String>,
-    pub category: String,
     pub created_at: String,
     pub updated_at: String,
     pub last_accessed: Option<String>,
@@ -99,7 +96,6 @@ pub struct NewPassword {
     pub password: String,
     pub notes: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub category: Option<String>,
     pub priority: Option<i32>,
 }
 
@@ -112,14 +108,12 @@ pub struct UpdatePassword {
     pub password: Option<String>,
     pub notes: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub category: Option<String>,
     pub priority: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub query: String,
-    pub category: Option<String>,
     pub tags: Option<Vec<String>>,
     pub limit: Option<i32>,
     pub offset: Option<i32>,
@@ -128,7 +122,6 @@ pub struct SearchQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PasswordStats {
     pub total_count: i64,
-    pub category_counts: std::collections::HashMap<String, i64>,
     pub tag_counts: std::collections::HashMap<String, i32>,
     pub recent_access_count: i64,
 }

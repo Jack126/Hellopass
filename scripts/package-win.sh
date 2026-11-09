@@ -98,7 +98,7 @@ EOF
 fi
 cat >> "$OUT/README.txt" <<'EOF'
 
-1. 按 Ctrl+Alt+Space 唤出搜索窗，Ctrl+Alt+L 立即锁定（都可在托盘「设置…」里改键）
+1. 按 Ctrl+Alt+Space 唤出搜索窗，Ctrl+Shift+L 立即锁定（都可在托盘「设置…」里改键）
    输入即搜，↑↓ 选择，Enter 复制密码，Ctrl+Enter 复制用户名，
    → 查看详情，Ctrl+N 新建，Esc 收起
 2. 托盘菜单：搜索 / 立即锁定 / 设置… / 退出；导入导出在设置窗完成

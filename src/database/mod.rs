@@ -60,7 +60,6 @@ impl Database {
                 last_accessed TEXT,
                 access_count INTEGER DEFAULT 0,
                 tags TEXT,
-                category TEXT DEFAULT 'general',
                 priority INTEGER DEFAULT 0,
                 metadata TEXT,
                 checksum TEXT
@@ -155,7 +154,7 @@ impl Database {
         Self::create_indexes(conn)?;
 
         // 记录 schema 版本
-        Self::set_schema_version(conn, 3)?;
+        Self::set_schema_version(conn, 4)?;
 
         Ok(())
     }
@@ -166,7 +165,6 @@ impl Database {
             ("last_accessed", "last_accessed TEXT"),
             ("access_count", "access_count INTEGER DEFAULT 0"),
             ("tags", "tags TEXT"),
-            ("category", "category TEXT DEFAULT 'general'"),
             ("priority", "priority INTEGER DEFAULT 0"),
             ("metadata", "metadata TEXT"),
             ("checksum", "checksum TEXT"),
@@ -174,6 +172,9 @@ impl Database {
         for (name, ddl) in password_cols.iter() {
             Self::ensure_column(conn, "passwords", name, ddl)?;
         }
+
+        // v4：category 从未在界面使用，删列（SQLite 3.35+ 支持 DROP COLUMN）
+        Self::drop_column_if_exists(conn, "passwords", "category")?;
 
         let audit_cols = [
             ("user_id", "user_id TEXT"),
@@ -207,6 +208,19 @@ impl Database {
         )? > 0;
         if !exists {
             let sql = format!("ALTER TABLE {} ADD COLUMN {}", table, ddl);
+            conn.execute(&sql, [])?;
+        }
+        Ok(())
+    }
+
+    fn drop_column_if_exists(conn: &Connection, table: &str, column: &str) -> Result<(), DatabaseError> {
+        let exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+            rusqlite::params![table, column],
+            |r| r.get::<_, i64>(0),
+        )? > 0;
+        if exists {
+            let sql = format!("ALTER TABLE {} DROP COLUMN {}", table, column);
             conn.execute(&sql, [])?;
         }
         Ok(())
@@ -387,7 +401,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
             conn.execute(
-                "CREATE TABLE passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, site_name TEXT NOT NULL, site_url TEXT NOT NULL, username TEXT NOT NULL, encrypted_password TEXT NOT NULL, encrypted_notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                "CREATE TABLE passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, site_name TEXT NOT NULL, site_url TEXT NOT NULL, username TEXT NOT NULL, encrypted_password TEXT NOT NULL, encrypted_notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, category TEXT DEFAULT 'general')",
                 [],
             )
             .unwrap();
@@ -403,7 +417,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_priority, 1);
-        assert_eq!(db.schema_version().unwrap(), 3);
+        let has_category: i64 = db
+            .get_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = 'category'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_category, 0, "v4 迁移应删除 category 列");
+        assert_eq!(db.schema_version().unwrap(), 4);
 
         let _ = std::fs::remove_file(&db_path);
     }

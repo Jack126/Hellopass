@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS passwords (
     last_accessed TEXT,
     access_count INTEGER DEFAULT 0,
     tags TEXT,
-    category TEXT DEFAULT 'general',
     priority INTEGER DEFAULT 0,
     metadata TEXT,
     checksum TEXT

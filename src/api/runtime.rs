@@ -576,7 +576,6 @@ impl VaultRuntime {
                 username: e.username,
                 notes: e.notes,
                 tags: e.tags,
-                category: e.category,
                 created_at: e.created_at,
                 updated_at: e.updated_at,
                 last_accessed: e.last_accessed,
@@ -644,7 +643,6 @@ impl VaultRuntime {
             let stats = v.get_stats()?;
             Ok(PasswordStats {
                 total_count: stats.password_count,
-                category_counts: Default::default(),
                 tag_counts: Default::default(),
                 recent_access_count: 0,
             })
@@ -901,7 +899,6 @@ struct ImportEntry {
     username: String,
     password: String,
     notes: Option<String>,
-    category: Option<String>,
     tags: Option<String>,
 }
 
@@ -968,7 +965,6 @@ fn parse_csv_import(data: &str) -> Result<Vec<ImportEntry>, String> {
             username,
             password,
             notes: get("notes").filter(|x| !x.is_empty()),
-            category: get("category").filter(|x| !x.is_empty()),
             tags: get("tags").filter(|x| !x.is_empty()),
         });
     }
@@ -984,7 +980,6 @@ fn entry_to_new(p: &PasswordEntry) -> NewPassword {
         password: p.password.clone().unwrap_or_default(),
         notes: p.notes.clone(),
         tags: Some(p.tags.clone()),
-        category: Some(p.category.clone()),
         priority: Some(p.priority),
     }
 }
@@ -1038,7 +1033,6 @@ fn import_csv(vault: &PasswordOperations, data: &str) -> Result<ImportResult, St
             password: e.password,
             notes: e.notes,
             tags: e.tags.map(|t| t.split(';').map(|s| s.to_string()).collect()),
-            category: e.category,
             priority: None,
         })
         .collect();
@@ -1104,7 +1098,6 @@ mod tests {
             password: "secret-value".into(),
             notes: Some("note".into()),
             tags: Some(vec!["work".into()]),
-            category: Some("work".into()),
             priority: Some(2),
         });
         assert!(add.success);
@@ -1146,7 +1139,6 @@ mod tests {
             password: "first-pass".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(add.success);
@@ -1160,7 +1152,6 @@ mod tests {
             password: Some("first-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         // 原样提交当前密码 = 未修改，应当成功（否则“编辑其他字段”会永远保存失败）
@@ -1174,7 +1165,6 @@ mod tests {
             password: Some("second-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(diff.success);
@@ -1188,7 +1178,6 @@ mod tests {
             password: Some("first-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(!back.success, "改回历史密码应被拦截");
@@ -1218,7 +1207,6 @@ mod tests {
             password: "secret".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         rt.lock();
@@ -1297,7 +1285,6 @@ mod tests {
             password: "secret".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         let backup = rt.export_backup().data.unwrap();
@@ -1326,7 +1313,6 @@ mod tests {
             password: "secret-value".into(),
             notes: Some("private note".into()),
             tags: Some(vec!["聊天".into()]),
-            category: Some("social".into()),
             priority: Some(1),
         });
         assert!(add.success);
@@ -1371,7 +1357,6 @@ mod tests {
             password: "secret".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         }).success);
         rt.lock();
@@ -1405,7 +1390,6 @@ mod tests {
             password: "pass-a".into(),
             notes: None,
             tags: Some(vec!["work".into()]),
-            category: Some("work".into()),
             priority: Some(1),
         }).data.unwrap();
         let b = rt.add_password(NewPassword {
@@ -1415,14 +1399,12 @@ mod tests {
             password: "pass-b".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         }).data.unwrap();
 
         assert_eq!(rt.get_passwords().data.unwrap().len(), 2);
         let found = rt.search_passwords(SearchQuery {
             query: "a.com".into(),
-            category: None,
             tags: None,
             limit: None,
             offset: None,
@@ -1437,7 +1419,6 @@ mod tests {
             password: Some("pass-a2".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(upd.success);
@@ -1478,7 +1459,6 @@ mod tests {
             password: "secret-value".into(),
             notes: Some("note".into()),
             tags: Some(vec!["work".into()]),
-            category: Some("general".into()),
             priority: Some(1),
         });
         assert!(add.success);
@@ -1531,7 +1511,6 @@ mod tests {
                 password: "pass-a".into(),
                 notes: None,
                 tags: None,
-                category: Some("work".into()),
                 priority: Some(2),
             })
             .data
@@ -1544,7 +1523,6 @@ mod tests {
                 password: "pass-b".into(),
                 notes: None,
                 tags: None,
-                category: Some("work".into()),
                 priority: Some(2),
             })
             .data
@@ -1596,7 +1574,6 @@ mod tests {
             password: "secret-value".into(),
             notes: Some("note".into()),
             tags: Some(vec!["work".into()]),
-            category: Some("general".into()),
             priority: Some(1),
         });
         assert!(add.success);
@@ -1641,7 +1618,6 @@ mod tests {
             password: "secret".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         let logs = rt.get_audit_logs();
@@ -1715,7 +1691,6 @@ mod tests {
             password: "secret".into(),
             notes: Some("note".into()),
             tags: Some(vec!["work".into()]),
-            category: Some("general".into()),
             priority: Some(1),
         });
         // 用列表接口拿到的条目序列化成 JSON，再喂回导入（验证去重逻辑）
@@ -1744,7 +1719,6 @@ mod tests {
             password: "hist-pass".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         let id = add.data.as_ref().unwrap().id.unwrap();
@@ -1756,7 +1730,6 @@ mod tests {
             password: Some("second-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(upd.success);
@@ -1773,7 +1746,6 @@ mod tests {
             password: Some("hist-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(!reuse.success, "改密后仍应拦截历史密码复用");
@@ -1827,7 +1799,6 @@ mod tests {
             password: "secret-value".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         let id = add.data.as_ref().unwrap().id.unwrap();

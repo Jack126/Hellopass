@@ -47,7 +47,6 @@ struct RawRow {
     last_accessed: Option<String>,
     access_count: i32,
     tags: Option<String>,
-    category: String,
     priority: i32,
     metadata: Option<String>,
     checksum: Option<String>,
@@ -119,11 +118,10 @@ impl PasswordOperations {
             None => None,
         };
         let tags_str = password.tags.clone().unwrap_or_default().join(",");
-        let category = password.category.clone().unwrap_or_else(|| "general".to_string());
         let priority = password.priority.unwrap_or(0);
 
         let id = self.conn().execute(
-            "INSERT INTO passwords              (site_name, site_url, username, encrypted_password, encrypted_notes, created_at, updated_at, access_count, tags, category, priority)              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10)",
+            "INSERT INTO passwords              (site_name, site_url, username, encrypted_password, encrypted_notes, created_at, updated_at, access_count, tags, priority)              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
             rusqlite::params![
                 password.site_name,
                 password.site_url,
@@ -133,7 +131,6 @@ impl PasswordOperations {
                 now,
                 now,
                 tags_str,
-                category,
                 priority
             ],
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
@@ -154,7 +151,7 @@ impl PasswordOperations {
     /// 获取所有密码（解密后返回明文）
     pub fn get_passwords(&self) -> Result<Vec<PasswordEntry>, OperationError> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, category, priority, metadata, checksum              FROM passwords ORDER BY created_at DESC",
+            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords ORDER BY created_at DESC",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
@@ -171,7 +168,7 @@ impl PasswordOperations {
         let mut stmt = self
             .conn()
             .prepare(
-                "SELECT id, site_name, site_url, username, tags, category, updated_at, last_accessed, access_count              FROM passwords              ORDER BY COALESCE(last_accessed, updated_at) DESC",
+                "SELECT id, site_name, site_url, username, tags, updated_at, last_accessed, access_count              FROM passwords              ORDER BY COALESCE(last_accessed, updated_at) DESC",
             )
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
@@ -193,7 +190,6 @@ impl PasswordOperations {
                     site_url: row.get("site_url")?,
                     username,
                     tags,
-                    category: row.get("category")?,
                     updated_at: row.get("updated_at")?,
                     last_accessed: row.get("last_accessed")?,
                     access_count: row.get("access_count")?,
@@ -210,7 +206,7 @@ impl PasswordOperations {
     /// 按 id 获取单条
     pub fn get_password(&self, id: i64) -> Result<PasswordEntry, OperationError> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, category, priority, metadata, checksum              FROM passwords WHERE id = ?1",
+            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords WHERE id = ?1",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         let row = stmt
@@ -227,7 +223,7 @@ impl PasswordOperations {
     pub fn search_passwords(&self, query: &str) -> Result<Vec<PasswordEntry>, OperationError> {
         let like = format!("%{}%", query);
         let mut stmt = self.conn().prepare(
-            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, category, priority, metadata, checksum              FROM passwords              WHERE site_name LIKE ?1 OR username LIKE ?1 OR tags LIKE ?1              ORDER BY created_at DESC",
+            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords              WHERE site_name LIKE ?1 OR username LIKE ?1 OR tags LIKE ?1              ORDER BY created_at DESC",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
@@ -246,7 +242,6 @@ impl PasswordOperations {
         let site_name = p.site_name.unwrap_or(current.site_name);
         let site_url = p.site_url.unwrap_or(current.site_url);
         let username = p.username.unwrap_or(current.username);
-        let category = p.category.unwrap_or(current.category);
         let priority = p.priority.unwrap_or(current.priority);
         let tags = p.tags.unwrap_or(current.tags);
         // 空字符串视为“不修改密码”；与当前密码相同也视为未修改（表单原样提交不应被当成复用）
@@ -276,9 +271,9 @@ impl PasswordOperations {
         let tags_str = tags.join(",");
 
         self.conn().execute(
-            "UPDATE passwords SET site_name=?1, site_url=?2, username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, category=?8, priority=?9 WHERE id=?10",
+            "UPDATE passwords SET site_name=?1, site_url=?2, username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, priority=?8 WHERE id=?9",
             rusqlite::params![
-                site_name, site_url, username, enc_pwd, enc_notes, now, tags_str, category, priority, p.id
+                site_name, site_url, username, enc_pwd, enc_notes, now, tags_str, priority, p.id
             ],
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
@@ -619,7 +614,6 @@ impl PasswordOperations {
             last_accessed: row.get("last_accessed")?,
             access_count: row.get("access_count")?,
             tags: row.get("tags")?,
-            category: row.get("category")?,
             priority: row.get("priority")?,
             metadata: row.get("metadata")?,
             checksum: row.get("checksum")?,
@@ -652,7 +646,6 @@ impl PasswordOperations {
             last_accessed: r.last_accessed,
             access_count: r.access_count,
             tags,
-            category: r.category,
             priority: r.priority,
             metadata: r.metadata,
             checksum: r.checksum,
@@ -704,7 +697,6 @@ mod tests {
             password: "super-secret".into(),
             notes: Some("2FA app".into()),
             tags: Some(vec!["work".into(), "dev".into()]),
-            category: Some("general".into()),
             priority: Some(1),
         }).expect("add password");
 
@@ -731,7 +723,6 @@ mod tests {
             password: Some("new-secret".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         }).expect("update");
         assert_eq!(updated.username, "alice_new");
@@ -762,7 +753,6 @@ mod tests {
             password: "first-pass".into(),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         }).expect("add");
         let id = added.id.unwrap();
@@ -775,7 +765,6 @@ mod tests {
             password: Some("second-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(ok.is_ok(), "update to new password should succeed: {:?}", ok.err());
@@ -788,7 +777,6 @@ mod tests {
             password: Some("first-pass".into()),
             notes: None,
             tags: None,
-            category: None,
             priority: None,
         });
         assert!(

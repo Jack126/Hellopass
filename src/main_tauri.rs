@@ -32,7 +32,7 @@ struct LauncherFlags {
 struct ClipboardGuard(Mutex<Option<String>>);
 
 const DEFAULT_WAKE_ACCEL: &str = "control+alt+space";
-const DEFAULT_LOCK_ACCEL: &str = "control+alt+l";
+const DEFAULT_LOCK_ACCEL: &str = "control+shift+l";
 // 插件用 id 作为注册表键，两个热键必须用不同 id，否则后注册的会覆盖前者。
 const WAKE_HOTKEY_ID: u32 = 1;
 const LOCK_HOTKEY_ID: u32 = 2;
@@ -355,6 +355,65 @@ fn end_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiRespo
         g.suspended = false;
     }
     ApiResponse::ok(())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct HotkeyCheck {
+    available: bool,
+    reason: Option<String>,
+}
+
+/// 录制阶段检查组合键是否可用：与另一个热键重复，或被系统/其他程序注册。
+#[tauri::command]
+fn check_hotkey_available(
+    app: AppHandle,
+    state: State<'_, HotkeyState>,
+    kind: String,
+    accelerator: String,
+) -> ApiResponse<HotkeyCheck> {
+    if kind != "wake" && kind != "lock" {
+        return ApiResponse::err_message("未知的热键类型");
+    }
+    let hotkey_id = if kind == "lock" { LOCK_HOTKEY_ID } else { WAKE_HOTKEY_ID };
+    let parsed = match parse_hotkey(&accelerator, hotkey_id) {
+        Ok(s) => s,
+        Err(e) => return ApiResponse::err_message(e),
+    };
+    let (other, suspended) = {
+        let g = state.0.lock().unwrap();
+        let other = if kind == "lock" {
+            g.wake.clone()
+        } else {
+            g.lock.clone()
+        };
+        (other, g.suspended)
+    };
+    if parsed == other {
+        return ApiResponse::ok(HotkeyCheck {
+            available: false,
+            reason: Some("与另一个热键相同".to_string()),
+        });
+    }
+    if !suspended {
+        // 当前两个热键都注册着，无法探测，交给真正的保存流程报错
+        return ApiResponse::ok(HotkeyCheck {
+            available: true,
+            reason: None,
+        });
+    }
+    match app.global_shortcut().register(parsed.clone()) {
+        Ok(_) => {
+            let _ = app.global_shortcut().unregister(parsed);
+            ApiResponse::ok(HotkeyCheck {
+                available: true,
+                reason: None,
+            })
+        }
+        Err(e) => ApiResponse::ok(HotkeyCheck {
+            available: false,
+            reason: Some(format!("已被其他程序占用：{}", e)),
+        }),
+    }
 }
 
 #[tauri::command]
@@ -763,7 +822,13 @@ fn main() {
             });
 
             // 全局热键：唤醒 / 锁定各一个，优先用保存值，失败退回默认值
-            let (saved_wake, saved_lock) = load_saved_accels(&hotkey_path);
+            let (saved_wake, mut saved_lock) = load_saved_accels(&hotkey_path);
+            // 旧默认 Ctrl+Alt+L 会被 QQ 抢走，检测到旧默认值时迁移到新默认
+            if let Some(s) = &saved_lock {
+                if s.eq_ignore_ascii_case("control+alt+l") {
+                    saved_lock = None;
+                }
+            }
             let handle = app.handle().clone();
             let wake = register_hotkey_with_fallback(
                 &handle,
@@ -878,7 +943,8 @@ fn main() {
             get_hotkey,
             set_hotkey,
             begin_hotkey_capture,
-            end_hotkey_capture
+            end_hotkey_capture,
+            check_hotkey_available
         ])
         .build(tauri::generate_context!())
         .expect("初始化 SecurePass 失败")
