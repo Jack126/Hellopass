@@ -62,7 +62,7 @@ impl VaultRuntime {
             failed_attempts: 0,
             lockout_until: None,
             last_activity: None,
-            session_timeout: Duration::minutes(30),
+            session_timeout: Duration::seconds(30),
             max_attempts: 5,
             lockout_duration: Duration::minutes(30),
             integrity_warning: None,
@@ -317,9 +317,10 @@ impl VaultRuntime {
         }
     }
 
-    /// 调整空闲超时（分钟），由前端「自动锁定」设置同步进来。
-    pub fn set_session_timeout(&mut self, timeout_minutes: i64) {
-        self.session_timeout = Duration::minutes(timeout_minutes.clamp(1, 24 * 60));
+    /// 调整空闲超时（秒），由前端「自动锁定」设置同步进来。
+    /// 下限 10 秒、上限 300 秒（5 分钟），防止误设成过短或过长。
+    pub fn set_session_timeout(&mut self, timeout_seconds: i64) {
+        self.session_timeout = Duration::seconds(timeout_seconds.clamp(10, 300));
     }
 
     /// 配置会话安全参数（用于测试或按策略调整）。
@@ -1474,6 +1475,25 @@ mod tests {
         }
         assert!(rt.lockout_until.is_some(), "should be locked");
         assert!(!rt.unlock("StrongPass123!").success);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn session_timeout_defaults_and_clamps() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        // 默认 30 秒
+        assert_eq!(rt.session_timeout.num_seconds(), 30);
+        // 下限 10 秒
+        rt.set_session_timeout(1);
+        assert_eq!(rt.session_timeout.num_seconds(), 10);
+        // 上限 5 分钟
+        rt.set_session_timeout(3600);
+        assert_eq!(rt.session_timeout.num_seconds(), 300);
+        rt.set_session_timeout(45);
+        assert_eq!(rt.session_timeout.num_seconds(), 45);
+
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
     }

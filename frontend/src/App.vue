@@ -392,13 +392,14 @@
         </el-form-item>
         
         <el-form-item label="锁定时间">
-          <el-slider 
-            v-model="settingsForm.lockTime" 
-            :min="1" 
-            :max="60"
-            :step="1"
-            :format-tooltip="(value) => `${value} 分钟`"
+          <el-slider
+            v-model="settingsForm.lockSeconds"
+            :min="10"
+            :max="300"
+            :step="10"
+            :format-tooltip="(value) => `${value} 秒`"
           />
+          <span class="settings-hint">默认 30 秒，最长 5 分钟；无操作即锁定</span>
         </el-form-item>
         
         <el-form-item label="自动备份">
@@ -552,7 +553,7 @@ const changingPassword = ref(false);
 // 设置表单
 const settingsForm = ref({
   autoLock: true,
-  lockTime: 15,
+  lockSeconds: 30,
   autoBackup: true,
   backupFrequency: 'weekly',
   notifications: true,
@@ -614,7 +615,7 @@ const showTutorial = () => {
 
 // ===================== 自动锁定 =====================
 const SETTINGS_STORAGE_KEY = 'securepass.settings';
-const IDLE_CHECK_INTERVAL_MS = 5000;
+const IDLE_CHECK_INTERVAL_MS = 1000;
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
 let idleTimer: number | undefined;
 let lastActivityAt = Date.now();
@@ -623,10 +624,10 @@ const loadSettings = () => {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) return;
-    const saved = JSON.parse(raw) as { autoLock?: boolean; lockTime?: number };
+    const saved = JSON.parse(raw) as { autoLock?: boolean; lockSeconds?: number };
     if (typeof saved.autoLock === 'boolean') settingsForm.value.autoLock = saved.autoLock;
-    if (typeof saved.lockTime === 'number') {
-      settingsForm.value.lockTime = Math.min(60, Math.max(1, Math.round(saved.lockTime)));
+    if (typeof saved.lockSeconds === 'number') {
+      settingsForm.value.lockSeconds = Math.min(300, Math.max(10, Math.round(saved.lockSeconds)));
     }
   } catch {
     // 本地设置损坏时使用默认值
@@ -639,7 +640,7 @@ const persistSettings = () => {
       SETTINGS_STORAGE_KEY,
       JSON.stringify({
         autoLock: settingsForm.value.autoLock,
-        lockTime: settingsForm.value.lockTime,
+        lockSeconds: settingsForm.value.lockSeconds,
       })
     );
   } catch {
@@ -651,7 +652,7 @@ const persistSettings = () => {
 const syncSessionTimeout = async () => {
   if (!passwordsLoaded.value) return;
   try {
-    await authApi.setSessionTimeout(settingsForm.value.lockTime);
+    await authApi.setSessionTimeout(settingsForm.value.lockSeconds);
   } catch {
     // 非致命：后端保留默认 30 分钟
   }
@@ -711,8 +712,8 @@ const lockVault = async (reason = '保险库已锁定') => {
 
 const checkIdle = () => {
   if (!passwordsLoaded.value || !settingsForm.value.autoLock) return;
-  if (Date.now() - lastActivityAt >= settingsForm.value.lockTime * 60 * 1000) {
-    lockVault(`已闲置 ${settingsForm.value.lockTime} 分钟，保险库已自动锁定`);
+  if (Date.now() - lastActivityAt >= settingsForm.value.lockSeconds * 1000) {
+    lockVault(`已闲置 ${settingsForm.value.lockSeconds} 秒，保险库已自动锁定`);
   }
 };
 
@@ -1148,6 +1149,12 @@ const submitAuth = async () => {
 
 .export-options {
   margin-bottom: 20px;
+}
+
+.settings-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .spb-picker {

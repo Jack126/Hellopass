@@ -75,9 +75,9 @@ export const authApi = {
     request<undefined>('unlock', { masterPassword }),
   // 锁定保险库
   logout: () => request<undefined>('lock'),
-  // 同步空闲超时（分钟）到后端会话
-  setSessionTimeout: (minutes: number) =>
-    request<undefined>('set_session_timeout', { minutes }),
+  // 同步空闲超时（秒）到后端会话
+  setSessionTimeout: (seconds: number) =>
+    request<undefined>('set_session_timeout', { seconds }),
   // 修改主密码
   changePassword: (oldPassword: string, newPassword: string) =>
     request<undefined>('change_master_password', {

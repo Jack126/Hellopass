@@ -171,9 +171,9 @@ fn save_export_file(
 
 /// 前端「自动锁定时间」设置同步给后端会话超时。
 #[tauri::command]
-fn set_session_timeout(state: State<'_, VaultState>, minutes: i64) -> ApiResponse<()> {
+fn set_session_timeout(state: State<'_, VaultState>, seconds: i64) -> ApiResponse<()> {
     let mut g = state.lock().unwrap();
-    g.set_session_timeout(minutes);
+    g.set_session_timeout(seconds);
     ApiResponse::ok(())
 }
 
