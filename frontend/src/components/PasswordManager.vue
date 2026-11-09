@@ -574,7 +574,9 @@ const savePassword = async () => {
     await loadPasswords();
   } catch (error) {
     console.error('保存密码失败:', error);
-    notificationApi.showNotification('保存密码失败', 'error');
+    // 后端校验失败（如密码复用）的具体原因要透传给用户
+    const message = error instanceof Error && error.message ? error.message : '保存密码失败';
+    notificationApi.showNotification(message, 'error');
   } finally {
     saving.value = false;
   }
