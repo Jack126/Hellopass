@@ -6,6 +6,8 @@
 // 约定：每个 Rust 命令返回 ApiResponse<T>；本客户端将其规范化为
 // 「成功则返回 data，失败则 reject」的 Promise，便于上层 try/catch 处理。
 
+import { ElMessage } from 'element-plus';
+
 const invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
   const tauri = (window as any).__TAURI__;
   // Tauri v2 的全局对象是 { core: { invoke }, ... }；兼容 v1 的 { invoke }
@@ -102,6 +104,9 @@ export const importExportApi = {
   exportBackup: () => request<string>('export_backup'),
   exportEncrypted: (exportPassword: string) =>
     request<string>('export_encrypted', { exportPassword }),
+  // 把导出内容写到系统「下载」目录（WebView 的 <a download> 在 WebKitGTK 下无效）
+  saveFile: (filename: string, content: string) =>
+    request<string>('save_export_file', { filename, content }),
   importEncrypted: (data: string, exportPassword: string) =>
     request<ImportResult>('import_encrypted', { data, exportPassword }),
   // 从加密备份恢复：data 为备份包内容，masterPassword 为创建备份时的主密码
@@ -111,8 +116,9 @@ export const importExportApi = {
 
 // ===================== 通知 API =====================
 export const notificationApi = {
+  // 统一走 Element Plus 的全局提示（之前只 console.log，用户看不到任何反馈）
   showNotification: (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
-    console.log(`[${type.toUpperCase()}] ${message}`);
+    ElMessage({ message, type, duration: 3000, showClose: true });
   },
 };
 

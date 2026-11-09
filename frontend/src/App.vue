@@ -739,22 +739,17 @@ const handleEncryptedExport = async () => {
   exporting.value = true;
   try {
     const content = await importExportApi.exportEncrypted(pwd);
-    const blob = new Blob([content], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'securepass-export-' + Date.now() + '.spb';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    notificationApi.showNotification('加密导出成功', 'success');
+    const path = await importExportApi.saveFile(
+      `securepass-export-${Date.now()}.spb`,
+      content
+    );
+    ElMessage.success('已保存到 ' + path);
     showExportDialog.value = false;
     exportPassword.value = '';
     exportPasswordConfirm.value = '';
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    notificationApi.showNotification('加密导出失败：' + msg, 'error');
+    ElMessage.error('加密导出失败：' + msg);
   } finally {
     exporting.value = false;
   }
@@ -829,19 +824,14 @@ const handleImport = async () => {
 const createBackup = async () => {
   try {
     const content = await importExportApi.exportBackup();
-    const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'securepass-backup-' + Date.now() + '.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    notificationApi.showNotification('备份已创建（加密文件）', 'success');
+    const path = await importExportApi.saveFile(
+      `securepass-backup-${Date.now()}.json`,
+      content
+    );
+    ElMessage.success('备份已保存到 ' + path);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    notificationApi.showNotification('创建备份失败：' + msg, 'error');
+    ElMessage.error('创建备份失败：' + msg);
   }
 };
 

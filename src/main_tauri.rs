@@ -120,6 +120,48 @@ fn import_encrypted(state: State<'_, VaultState>, data: String, export_password:
     g.import_encrypted(data, export_password)
 }
 
+/// 把导出的文件内容写入「下载」目录并返回完整路径。
+///
+/// WebView 里的 <a download> 在 WebKitGTK 下不会触发任何下载（点了没反应），
+/// 因此导出/备份统一走后端落盘。
+#[tauri::command]
+fn save_export_file(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+) -> ApiResponse<String> {
+    let safe_name = std::path::Path::new(&filename)
+        .file_name()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| std::ffi::OsString::from("securepass-export.bin"));
+
+    let dir = app
+        .path()
+        .download_dir()
+        .ok()
+        .filter(|d| d.exists())
+        .or_else(|| app.path().home_dir().ok())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let path = dir.join(safe_name);
+    match std::fs::write(&path, content.as_bytes()) {
+        Ok(_) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o600);
+                    let _ = std::fs::set_permissions(&path, perms);
+                }
+            }
+            ApiResponse::ok(path.display().to_string())
+        }
+        Err(e) => ApiResponse::err_message(format!("保存文件失败: {}", e)),
+    }
+}
+
 /// 前端「自动锁定时间」设置同步给后端会话超时。
 #[tauri::command]
 fn set_session_timeout(state: State<'_, VaultState>, minutes: i64) -> ApiResponse<()> {
@@ -258,6 +300,7 @@ fn main() {
             get_password_stats,
             import_passwords,
             set_session_timeout,
+            save_export_file,
             export_backup,
             restore_backup,
             export_encrypted,
