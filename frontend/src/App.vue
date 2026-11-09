@@ -182,6 +182,30 @@
         title="导出为加密文件（AES-256-GCM）"
         description="需设置一个「导出密码」。文件只有用该密码才能解密，与保险库主密码无关，可安全用于跨设备 / 外部分发。"
       />
+
+      <div class="export-select">
+        <div class="export-select-bar">
+          <span>选择要导出的条目（已选 {{ exportSelectedIds.length }} / {{ exportCandidates.length }}）</span>
+          <span class="export-select-actions">
+            <el-button size="small" @click="selectAllExports">全选</el-button>
+            <el-button size="small" @click="clearExportSelection">清空</el-button>
+          </span>
+        </div>
+        <el-table
+          ref="exportTableRef"
+          :data="exportCandidates"
+          height="200"
+          size="small"
+          border
+          @selection-change="onExportSelectionChange"
+        >
+          <el-table-column type="selection" width="46" />
+          <el-table-column prop="site_name" label="站点" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="username" label="用户名" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="category" label="分类" width="80" />
+        </el-table>
+      </div>
+
       <el-form label-width="90px" style="margin-top: 16px;">
         <el-form-item label="导出密码">
           <el-input
@@ -467,12 +491,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs';
 import { Download, Upload, DocumentCopy, Setting, Lock } from '@element-plus/icons-vue';
 import PasswordManager from './components/PasswordManager.vue';
-import { authApi, importExportApi, notificationApi, passwordApi, type PasswordPolicy, type PasswordExpiryInfo, type AuditLogEntry, type IntegrityReport } from './api';
+import { authApi, importExportApi, notificationApi, passwordApi, type PasswordEntry, type PasswordPolicy, type PasswordExpiryInfo, type AuditLogEntry, type IntegrityReport } from './api';
 
 // 响应式数据
 const passwordsLoaded = ref(false);
@@ -501,6 +525,9 @@ const integrityReport = ref<IntegrityReport | null>(null);
 const integrityLoading = ref(false);
 
 // 导出设置
+const exportCandidates = ref<PasswordEntry[]>([]);
+const exportSelectedIds = ref<number[]>([]);
+const exportTableRef = ref();
 const exportPassword = ref('');
 const exportPasswordConfirm = ref('');
 
@@ -719,10 +746,37 @@ const runIntegrityCheck = async () => {
   }
 };
 
-const openExportDialog = () => {
+const openExportDialog = async () => {
   exportPassword.value = '';
   exportPasswordConfirm.value = '';
+  exportCandidates.value = [];
+  exportSelectedIds.value = [];
   showExportDialog.value = true;
+  try {
+    exportCandidates.value = await passwordApi.getPasswords();
+    await nextTick();
+    // 默认全选，用户再按需取消
+    if (exportCandidates.value.length > 0) {
+      exportTableRef.value?.toggleAllSelection();
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage.error('加载条目失败：' + msg);
+  }
+};
+
+const onExportSelectionChange = (rows: PasswordEntry[]) => {
+  exportSelectedIds.value = rows
+    .map((row) => row.id)
+    .filter((id): id is number => typeof id === 'number');
+};
+
+const selectAllExports = () => {
+  exportTableRef.value?.toggleAllSelection();
+};
+
+const clearExportSelection = () => {
+  exportTableRef.value?.clearSelection();
 };
 
 const handleEncryptedExport = async () => {
@@ -736,9 +790,13 @@ const handleEncryptedExport = async () => {
     notificationApi.showNotification('两次输入的导出密码不一致', 'warning');
     return;
   }
+  if (exportSelectedIds.value.length === 0) {
+    ElMessage.warning('请至少选择一条要导出的条目');
+    return;
+  }
   exporting.value = true;
   try {
-    const content = await importExportApi.exportEncrypted(pwd);
+    const content = await importExportApi.exportEncrypted(pwd, exportSelectedIds.value);
     const path = await importExportApi.saveFile(
       `securepass-export-${Date.now()}.spb`,
       content
@@ -1087,6 +1145,24 @@ const submitAuth = async () => {
 
 .export-options {
   margin-bottom: 20px;
+}
+
+.export-select {
+  margin-top: 16px;
+}
+
+.export-select-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #606266;
+}
+
+.export-select-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .export-info {

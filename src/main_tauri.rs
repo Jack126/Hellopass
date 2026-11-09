@@ -109,9 +109,13 @@ fn restore_backup(state: State<'_, VaultState>, data: String, master_password: S
 }
 
 #[tauri::command]
-fn export_encrypted(state: State<'_, VaultState>, export_password: String) -> ApiResponse<String> {
+fn export_encrypted(
+    state: State<'_, VaultState>,
+    export_password: String,
+    ids: Option<Vec<i64>>,
+) -> ApiResponse<String> {
     let mut g = state.lock().unwrap();
-    g.export_encrypted(&export_password)
+    g.export_encrypted(&export_password, ids)
 }
 
 #[tauri::command]

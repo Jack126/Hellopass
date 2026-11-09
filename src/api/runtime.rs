@@ -618,12 +618,35 @@ impl VaultRuntime {
     /// 加密导出（单独导出密码）：用「导出密码」派生密钥（随机 salt，PBKDF2 600k 次），
     /// 把所有条目序列化为 JSON 后做 AES-256-GCM 加密，输出自包含加密包。
     /// 该文件与保险库主密码无关——只有知道导出密码的人才能解密，适合跨设备/外部分发。
-    pub fn export_encrypted(&mut self, export_password: &str) -> ApiResponse<String> {
+    pub fn export_encrypted(
+        &mut self,
+        export_password: &str,
+        ids: Option<Vec<i64>>,
+    ) -> ApiResponse<String> {
         if !self.enforce_session() {
             return locked();
         }
+        if export_password.len() < 8 {
+            return ApiResponse::err_message("导出密码至少 8 位");
+        }
         let result = self.with_vault(|v| {
             let entries = v.get_passwords()?;
+            // ids = None 导出全部；Some(list) 只导出选中项
+            let entries: Vec<PasswordEntry> = match ids {
+                Some(list) => {
+                    let set: HashSet<i64> = list.into_iter().collect();
+                    entries
+                        .into_iter()
+                        .filter(|e| e.id.map(|i| set.contains(&i)).unwrap_or(false))
+                        .collect()
+                }
+                None => entries,
+            };
+            if entries.is_empty() {
+                return Err(OperationError::ValidationError(
+                    "请至少选择一条要导出的条目".to_string(),
+                ));
+            }
             let json = serde_json::to_vec(&entries)
                 .map_err(|e| OperationError::DatabaseError(format!("序列化失败: {}", e)))?;
             let engine = SecureCryptoEngine::new(export_password, None)
@@ -1266,7 +1289,7 @@ mod tests {
         });
         assert!(add.success);
 
-        let pkg = src.export_encrypted("ExportPass456!");
+        let pkg = src.export_encrypted("ExportPass456!", None);
         assert!(pkg.success, "export_encrypted: {:?}", pkg.error);
         let blob = pkg.data.unwrap();
         assert!(!blob.contains("secret-value"), "encrypted export must be ciphertext");
@@ -1298,6 +1321,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg2);
         let _ = std::fs::remove_file(&db3);
         let _ = std::fs::remove_dir_all(&cfg3);
+    }
+
+    #[test]
+    fn export_encrypted_respects_selection() {
+        let (db1, cfg1) = tmp();
+        let mut src = VaultRuntime::new(cfg1.clone(), db1.clone());
+        src.setup("MasterPass123!");
+        assert!(src.unlock("MasterPass123!").success);
+        let a = src
+            .add_password(NewPassword {
+                site_name: "a.com".into(),
+                site_url: "https://a.com".into(),
+                username: "alice".into(),
+                password: "pass-a".into(),
+                notes: None,
+                tags: None,
+                category: Some("work".into()),
+                priority: Some(2),
+            })
+            .data
+            .unwrap();
+        let _b = src
+            .add_password(NewPassword {
+                site_name: "b.com".into(),
+                site_url: "https://b.com".into(),
+                username: "bob".into(),
+                password: "pass-b".into(),
+                notes: None,
+                tags: None,
+                category: Some("work".into()),
+                priority: Some(2),
+            })
+            .data
+            .unwrap();
+
+        // 只导出 a.com
+        let pkg = src.export_encrypted("ExportPass456!", Some(vec![a.id.unwrap()]));
+        assert!(pkg.success, "export: {:?}", pkg.error);
+
+        let (db2, cfg2) = tmp();
+        let mut dst = VaultRuntime::new(cfg2.clone(), db2.clone());
+        dst.setup("OtherMaster789!");
+        assert!(dst.unlock("OtherMaster789!").success);
+        let restored = dst.import_encrypted(pkg.data.unwrap(), "ExportPass456!".into());
+        assert!(restored.success, "import: {:?}", restored.error);
+        assert_eq!(restored.data.unwrap().imported_count, 1);
+        let names: Vec<String> = dst
+            .get_passwords()
+            .data
+            .unwrap()
+            .into_iter()
+            .map(|e| e.site_name)
+            .collect();
+        assert_eq!(names, vec!["a.com".to_string()]);
+
+        // 空选择必须报错
+        let empty = src.export_encrypted("ExportPass456!", Some(vec![]));
+        assert!(!empty.success, "空选择不应导出全部");
+        // 导出密码过短必须报错
+        let weak = src.export_encrypted("short", None);
+        assert!(!weak.success, "导出密码应至少 8 位");
+
+        let _ = std::fs::remove_file(&db1);
+        let _ = std::fs::remove_dir_all(&cfg1);
+        let _ = std::fs::remove_file(&db2);
+        let _ = std::fs::remove_dir_all(&cfg2);
     }
 
     #[test]

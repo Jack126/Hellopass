@@ -102,8 +102,8 @@ export const importExportApi = {
     request<ImportResult>('import_passwords', { data }),
   // 创建加密备份：返回自包含备份包（JSON 字符串）
   exportBackup: () => request<string>('export_backup'),
-  exportEncrypted: (exportPassword: string) =>
-    request<string>('export_encrypted', { exportPassword }),
+  exportEncrypted: (exportPassword: string, ids?: number[]) =>
+    request<string>('export_encrypted', { exportPassword, ids: ids ?? null }),
   // 把导出内容写到系统「下载」目录（WebView 的 <a download> 在 WebKitGTK 下无效）
   saveFile: (filename: string, content: string) =>
     request<string>('save_export_file', { filename, content }),
