@@ -34,7 +34,7 @@ name = "securepass_tauri"
 path = "src/main_tauri.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", optional = true }
+tauri-build = { version = "2", optional = true , features = [] }
 
 [features]
 default = ["tauri-app"]
