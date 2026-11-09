@@ -64,6 +64,7 @@
     <form v-else-if="mode === 'unlock'" class="auth" @submit.prevent="doUnlock">
       <div class="auth-icon">🔒</div>
       <h1>解锁 SecurePass</h1>
+      <p v-if="pendingName" class="muted pending">解锁后将导入：{{ pendingName }}</p>
       <input
         ref="authInput"
         v-model="password"
@@ -173,6 +174,8 @@ const confirmDelete = ref(false);
 const promptKind = ref<'import' | 'export'>('import');
 const promptPath = ref('');
 const promptValue = ref('');
+const pendingImport = ref<{ path: string; needsPassword: boolean } | null>(null);
+const pendingName = ref('');
 
 const searchInput = ref<HTMLInputElement>();
 const authInput = ref<HTMLInputElement>();
@@ -213,6 +216,8 @@ function resetSensitive() {
   password.value = '';
   password2.value = '';
   form.password = '';
+  pendingImport.value = null;
+  pendingName.value = '';
 }
 
 async function refresh() {
@@ -229,9 +234,13 @@ async function goSearch() {
   searchInput.value?.focus();
 }
 
+function isPromptMode() {
+  return mode.value === 'prompt';
+}
+
 async function onShown() {
   error.value = '';
-  if (mode.value === 'edit' || mode.value === 'prompt') return;
+  if (mode.value === 'edit' || isPromptMode()) return;
   try {
     if (!(await api.isSet())) {
       mode.value = 'setup';
@@ -240,6 +249,7 @@ async function onShown() {
       return;
     }
     if (!(await api.status())) {
+      if (isPromptMode()) return;
       mode.value = 'unlock';
       await api.suppressHide(true);
       await nextTick();
@@ -280,6 +290,22 @@ async function doUnlock() {
     await api.unlock(password.value);
     password.value = '';
     await refresh();
+    const pending = pendingImport.value;
+    if (pending) {
+      pendingImport.value = null;
+      pendingName.value = '';
+      if (pending.needsPassword) {
+        onTrayPrompt({ kind: 'import', path: pending.path });
+        return;
+      }
+      try {
+        await api.importFromPath(pending.path, '');
+        await hide();
+      } catch (e) {
+        error.value = (e as Error).message;
+      }
+      return;
+    }
     await goSearch();
   } catch (e) {
     error.value = (e as Error).message;
@@ -453,6 +479,21 @@ async function removeEntry() {
   }
 }
 
+async function onPendingImport(payload: {
+  path: string;
+  needsPassword: boolean;
+  name: string;
+}) {
+  pendingImport.value = { path: payload.path, needsPassword: payload.needsPassword };
+  pendingName.value = payload.name;
+  mode.value = 'unlock';
+  error.value = '';
+  await api.suppressHide(true);
+  await api.resize(420);
+  await nextTick();
+  authInput.value?.focus();
+}
+
 function onTrayPrompt(payload: { kind: 'import' | 'export'; path: string }) {
   promptKind.value = payload.kind;
   promptPath.value = payload.path;
@@ -530,8 +571,16 @@ onMounted(async () => {
     await listen<{ kind: 'import' | 'export'; path: string }>('tray-prompt', onTrayPrompt)
   );
   unlisten.push(
+    await listen<{ path: string; needsPassword: boolean; name: string }>(
+      'tray-pending-import',
+      onPendingImport
+    )
+  );
+  unlisten.push(
     await listen('vault-locked', () => {
       resetSensitive();
+      pendingImport.value = null;
+      pendingName.value = '';
       items.value = [];
       mode.value = 'unlock';
       void api.suppressHide(true);
