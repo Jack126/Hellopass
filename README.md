@@ -126,10 +126,11 @@ passwd/
 cargo test --bin securepass_cli --no-default-features
 ```
 
-### 前端构建
+### 前端构建与单元测试
 ```bash
 cd frontend
 npm install
+npm test        # 锁定清理 / clearSensitiveState 静态守护
 npm run build
 ```
 

@@ -34,6 +34,10 @@ jobs:
       - name: Install deps
         working-directory: frontend
         run: npm install
+      - name: Unit tests (lock clears sensitive state)
+        working-directory: frontend
+        run: npm test
+
       - name: Build
         working-directory: frontend
         run: npm run build
