@@ -96,8 +96,15 @@
           <dl v-if="integrity">
             <dt>SQLite</dt><dd>{{ integrity.sqlite_ok ? '正常' : '异常' }}</dd>
             <dt>数据库大小</dt><dd>{{ (integrity.db_size / 1024).toFixed(1) }} KB</dd>
-            <dt>与锁定基线</dt><dd>{{ integrity.baseline_ok ? '一致' : '不一致（可能被外部修改）' }}</dd>
+            <dt>与基线</dt><dd>{{ integrity.baseline_ok ? '一致' : '不一致' }}</dd>
           </dl>
+          <template v-if="integrity && !integrity.baseline_ok">
+            <p class="muted warn-text">
+              与上次正常关闭时记录的基线不一致。常见原因：上次没走「退出」而是直接结束了进程、断电，
+              或用外部工具改过数据库。确认是你自己的改动，点下面按钮重建基线即可。
+            </p>
+            <button class="ghost" :disabled="busy" @click="rebuildBaseline">重建基线</button>
+          </template>
         </div>
 
         <div class="card">
@@ -125,6 +132,20 @@
             <h2>最近操作</h2>
             <button class="ghost" :disabled="busy" @click="loadAudit">刷新</button>
           </div>
+          <div class="row">
+            <span class="muted">自动保留最近 30 天、最多 1000 条</span>
+            <span class="muted">
+              手动清理
+              <select v-model.number="auditDays">
+                <option :value="7">7 天</option>
+                <option :value="30">30 天</option>
+                <option :value="90">90 天</option>
+              </select>
+              前
+              <button class="ghost" :disabled="busy" @click="purgeAudit">执行</button>
+            </span>
+          </div>
+          <p class="muted">解锁、复制、增删改都会记一条；超出上限时自动删最旧的。</p>
           <table>
             <thead><tr><th>时间</th><th>动作</th><th>结果</th></tr></thead>
             <tbody>
@@ -294,6 +315,7 @@ const integrity = ref<Integrity | null>(null);
 const stats = ref<Stats | null>(null);
 const expiring = ref<Expiry[]>([]);
 const audit = ref<AuditLog[]>([]);
+const auditDays = ref(30);
 
 function setNotice(text: string, kind: 'ok' | 'bad' = 'ok') {
   notice.value = text;
@@ -419,6 +441,27 @@ async function doRestore() {
 async function checkIntegrity() {
   const res = await guard(() => request<Integrity>('check_integrity'));
   if (res) integrity.value = res;
+}
+
+async function rebuildBaseline() {
+  const ok = await guard(async () => {
+    await request('rebuild_baseline');
+    return true;
+  });
+  if (ok) {
+    setNotice('完整性基线已重建');
+    await checkIntegrity();
+  }
+}
+
+async function purgeAudit() {
+  const removed = await guard(() =>
+    request<number>('purge_old_audit_logs', { days: auditDays.value })
+  );
+  if (removed !== undefined) {
+    setNotice(`已清理 ${removed} 条旧日志`);
+    await loadAudit();
+  }
 }
 
 async function loadStats() {

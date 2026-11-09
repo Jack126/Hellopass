@@ -521,6 +521,12 @@ fn check_integrity(state: State<'_, VaultState>) -> ApiResponse<IntegrityReport>
     g.check_integrity()
 }
 
+#[tauri::command]
+fn rebuild_baseline(state: State<'_, VaultState>) -> ApiResponse<()> {
+    let mut g = state.lock().unwrap();
+    g.rebuild_baseline()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(
@@ -662,7 +668,13 @@ fn main() {
                         }
                     }
                     "settings" => open_settings(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // 退出前正常锁定：写入完整性基线，避免下次解锁误报「不一致」
+                        if let Some(state) = app.try_state::<VaultState>() {
+                            state.lock().unwrap().lock();
+                        }
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -702,6 +714,7 @@ fn main() {
             get_audit_logs,
             purge_old_audit_logs,
             check_integrity,
+            rebuild_baseline,
             check_password_strength,
             get_password_policy,
             get_expiring_passwords,
@@ -718,6 +731,14 @@ fn main() {
             begin_hotkey_capture,
             end_hotkey_capture
         ])
-        .run(tauri::generate_context!())
-        .expect("运行 SecurePass 失败");
+        .build(tauri::generate_context!())
+        .expect("初始化 SecurePass 失败")
+        .run(|app, event| {
+            // 任何退出路径都先锁定，保证基线是最新的
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app.try_state::<VaultState>() {
+                    state.lock().unwrap().lock();
+                }
+            }
+        });
 }

@@ -9,6 +9,8 @@ use crate::utils::log;
 
 /// 记住的历史密码条数：更新密码时不能与最近这么多次使用过的密码相同。
 const PASSWORD_HISTORY_LIMIT: usize = 5;
+/// 审计日志最大条数：超出后删除最旧的，避免长期使用后无限增长。
+const AUDIT_MAX_ROWS: i64 = 1000;
 /// 密码最长使用年限（天），超过即视为过期。
 const PASSWORD_MAX_AGE_DAYS: i64 = 90;
 
@@ -416,6 +418,21 @@ impl PasswordOperations {
             success,
             error_message,
         );
+        // 每写一条就修剪一次；表很小，单条 DELETE 的成本可以接受。
+        let _ = self.prune_audit_logs(AUDIT_MAX_ROWS);
+    }
+
+    /// 只保留最近 max_rows 条审计日志，返回删除条数。
+    pub fn prune_audit_logs(&self, max_rows: i64) -> Result<usize, OperationError> {
+        if max_rows <= 0 {
+            return Ok(0);
+        }
+        self.conn()
+            .execute(
+                "DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT ?1)",
+                rusqlite::params![max_rows],
+            )
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))
     }
 
     /// 查询最近的审计日志（按时间倒序）。

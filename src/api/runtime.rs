@@ -24,8 +24,10 @@ fn to_response<T>(result: AppResult<T>) -> ApiResponse<T> {
     }
 }
 
-/// 审计日志默认保留天数。
-const AUDIT_RETENTION_DAYS: i64 = 90;
+/// 审计日志默认保留天数（启动器每次复制都会写一条，不宜留太久）。
+const AUDIT_RETENTION_DAYS: i64 = 30;
+/// 审计日志最大条数，超出后删最旧的。
+const AUDIT_MAX_ROWS: i64 = 1000;
 
 /// 失败计数与锁定截止时间：需要落盘，否则重启应用就能重置 5 次失败锁定。
 #[derive(Serialize, Deserialize, Default)]
@@ -199,9 +201,10 @@ impl VaultRuntime {
                 self.clear_lockout_state();
                 self.vault = Some(PasswordOperations::new(db, crypto));
                 self.last_activity = Some(Utc::now());
-                // 解锁成功后按保留策略清理过期审计日志（best-effort）
+                // 解锁成功后按保留策略清理过期/超量审计日志（best-effort）
                 if let Some(v) = &self.vault {
                     let _ = v.purge_old_audit_logs(AUDIT_RETENTION_DAYS);
+                    let _ = v.prune_audit_logs(AUDIT_MAX_ROWS);
                 }
                 if let Some(w) = &baseline_warning {
                     log::error("integrity", w);
@@ -366,7 +369,8 @@ impl VaultRuntime {
             return locked();
         }
         let config_checksum = self.config_checksum();
-        let baseline_ok = self.verify_baseline().is_none();
+        // 基线只在解锁前比对一次：解锁本身会写审计日志，会话内再比对必然不一致。
+        let baseline_ok = self.integrity_warning.is_none();
         let result = self.with_vault(|v| {
             let (sqlite_ok, db_checksum, db_size) = v.check_integrity()?;
             Ok(IntegrityReport {
@@ -430,6 +434,20 @@ impl VaultRuntime {
     /// 最近一次解锁时的完整性告警（None 表示一致或无基线）。
     pub fn integrity_warning(&self) -> Option<&str> {
         self.integrity_warning.as_deref()
+    }
+
+    /// 把当前数据库文件记为新的可信基线（用于确认「不一致」是正常改动后手动消除告警）。
+    pub fn rebuild_baseline(&mut self) -> ApiResponse<()> {
+        if !self.enforce_session() {
+            return locked();
+        }
+        self.write_baseline();
+        self.integrity_warning = None;
+        if let Some(v) = &self.vault {
+            v.add_audit_log("rebuild_baseline", Some("integrity"), None, None, true, None);
+        }
+        self.refresh_session();
+        ApiResponse::ok(())
     }
 
     fn with_vault<T, F>(&self, f: F) -> ApiResponse<T>
@@ -1334,6 +1352,41 @@ mod tests {
         assert!(rt.list_entry_summaries().data.is_none());
         assert!(rt.secret_for_copy(id, "password").is_err());
         assert!(rt.reveal_password(id).is_err());
+    }
+
+    #[test]
+    fn integrity_report_uses_unlock_time_baseline() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(rt.setup("StrongPass123!").success);
+        assert!(rt.unlock("StrongPass123!").success);
+        let rep = rt.check_integrity();
+        assert!(rep.success);
+        assert!(rep.data.unwrap().baseline_ok, "无基线时应视为一致");
+
+        assert!(rt.add_password(NewPassword {
+            site_name: "example.com".into(),
+            site_url: String::new(),
+            username: "a".into(),
+            password: "secret".into(),
+            notes: None,
+            tags: None,
+            category: None,
+            priority: None,
+        }).success);
+        rt.lock();
+        assert!(std::path::Path::new(&format!("{}.integrity", db.display())).exists());
+
+        let mut rt2 = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(rt2.unlock("StrongPass123!").success);
+        assert!(rt2.integrity_warning().is_none(), "正常锁定后不应告警");
+        let rep2 = rt2.check_integrity();
+        assert!(rep2.success);
+        assert!(rep2.data.unwrap().baseline_ok);
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_file(format!("{}.integrity", db.display()));
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]
