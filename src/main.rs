@@ -1,10 +1,15 @@
+// 说明：本二进制是无头自测/演示入口；api/database/security 等共享模块主要供
+// securepass_tauri 使用。仅编译本二进制时，未被调用的共享项产生 dead_code 警告属预期，
+// 故在此 crate 级关闭该 lint（不影响 securepass_tauri 的诊断）。
+#![allow(dead_code)]
+
 mod security;
 mod database;
 mod api;
 mod utils;
+mod error;
 
 use database::Database;
-use utils::app_state::AppState;
 
 fn main() {
     println!("SecurePass - 密码管理器");
@@ -29,10 +34,6 @@ fn main() {
             return;
         }
     };
-    
-    // 初始化应用状态
-    let app_state = AppState::new(database, app_data_dir);
-    println!("✅ 应用状态初始化成功");
     
     // 测试加密功能
     println!("\n🔐 测试加密功能...");
@@ -98,7 +99,7 @@ fn main() {
     
     // 测试数据库操作
     println!("\n🗄️ 测试数据库操作...");
-    match app_state.database.get_stats() {
+    match database.get_stats() {
         Ok(stats) => {
             println!("✅ 数据库统计:");
             println!("   - 密码数量: {}", stats.password_count);
@@ -110,7 +111,7 @@ fn main() {
     }
     
     // 测试数据库完整性
-    match app_state.database.check_integrity() {
+    match database.check_integrity() {
         Ok(is_valid) => {
             if is_valid {
                 println!("✅ 数据库完整性检查通过");

@@ -1,205 +1,280 @@
-use std::path::PathBuf;
-use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
-use chrono::serde::{ts_seconds, ts_seconds_option};
-use tauri::{
-    menu::{MenuBuilder, MenuItem},
-    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    Manager, Result, State
-};
+mod security;
+mod database;
+mod api;
+mod utils;
+mod error;
 
-// 数据库状态
-#[derive(Debug, Clone)]
-pub struct DatabaseState {
-    pub db: SimpleDatabase,
-}
+use std::sync::Mutex;
+use tauri::State;
+use tauri::Manager;
+use crate::api::runtime::VaultRuntime;
+use crate::api::dto::*;
+use crate::security::policies::PasswordStrengthResult;
 
-impl DatabaseState {
-    pub fn new() -> Self {
-        Self {
-            db: SimpleDatabase::new(),
-        }
-    }
-}
+type VaultState = Mutex<VaultRuntime>;
 
-// 简化的密码条目结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PasswordEntry {
-    pub id: i64,
-    pub site_name: String,
-    pub username: String,
-    pub encrypted_password: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewPassword {
-    pub site_name: String,
-    pub username: String,
-    pub password: String,
-}
-
-// 简化的数据库操作
-pub struct SimpleDatabase {
-    pub entries: Vec<PasswordEntry>,
-}
-
-impl SimpleDatabase {
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
-    pub fn add_password(&mut self, password: NewPassword) -> PasswordEntry {
-        let entry = PasswordEntry {
-            id: self.entries.len() as i64 + 1,
-            site_name: password.site_name,
-            username: password.username,
-            encrypted_password: password.password,
-            created_at: Utc::now().to_string(),
-        };
-        self.entries.push(entry.clone());
-        entry
-    }
-
-    pub fn get_passwords(&self) -> Vec<PasswordEntry> {
-        self.entries.clone()
-    }
-
-    pub fn delete_password(&mut self, id: i64) -> bool {
-        let index = self.entries.iter().position(|p| p.id == id);
-        if let Some(index) = index {
-            self.entries.remove(index);
-            true
-        } else {
-            false
-        }
-    }
-}
-
-// API响应结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiResponse<T> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-    #[serde(with = "ts_seconds")]
-    pub timestamp: DateTime<Utc>,
-}
-
-// Tauri命令
 #[tauri::command]
-async fn add_password(
-    state: State<DatabaseState>,
-    password: NewPassword,
-) -> Result<ApiResponse<PasswordEntry>> {
-    let mut db = state.db.clone();
-    let entry = db.add_password(password);
-    Ok(ApiResponse {
-        success: true,
-        data: Some(entry),
-        error: None,
-        timestamp: Utc::now(),
-    })
+fn setup_master_password(state: State<'_, VaultState>, master_password: String) -> ApiResponse<()> {
+    let mut g = state.lock().unwrap();
+    g.setup(&master_password)
 }
 
 #[tauri::command]
-async fn get_passwords(state: State<DatabaseState>) -> Result<ApiResponse<Vec<PasswordEntry>>> {
-    let passwords = state.db.get_passwords();
-    Ok(ApiResponse {
-        success: true,
-        data: Some(passwords),
-        error: None,
-        timestamp: Utc::now(),
-    })
+fn is_master_password_set(state: State<'_, VaultState>) -> ApiResponse<bool> {
+    let g = state.lock().unwrap();
+    ApiResponse::ok(g.is_set())
 }
 
 #[tauri::command]
-async fn delete_password(
-    state: State<DatabaseState>,
-    id: i64,
-) -> Result<ApiResponse<()>> {
-    let mut db = state.db.clone();
-    let success = db.delete_password(id);
-    Ok(ApiResponse {
-        success,
-        data: Some(()),
-        error: if success { None } else { Some("Password not found".to_string()) },
-        timestamp: Utc::now(),
-    })
+fn unlock(state: State<'_, VaultState>, master_password: String) -> ApiResponse<()> {
+    let mut g = state.lock().unwrap();
+    g.unlock(&master_password)
 }
 
 #[tauri::command]
-async fn show_notification(message: String) {
-    println!("Notification: {}", message);
+fn lock(state: State<'_, VaultState>) -> ApiResponse<()> {
+    let mut g = state.lock().unwrap();
+    g.lock();
+    ApiResponse::ok(())
+}
+
+#[tauri::command]
+fn change_master_password(
+    state: State<'_, VaultState>,
+    old_password: String,
+    new_password: String,
+) -> ApiResponse<()> {
+    let mut g = state.lock().unwrap();
+    g.change_password(&old_password, &new_password)
+}
+
+#[tauri::command]
+fn add_password(state: State<'_, VaultState>, password: NewPassword) -> ApiResponse<PasswordEntry> {
+    let mut g = state.lock().unwrap();
+    g.add_password(password)
+}
+
+#[tauri::command]
+fn get_passwords(state: State<'_, VaultState>) -> ApiResponse<Vec<PasswordEntry>> {
+    let mut g = state.lock().unwrap();
+    g.get_passwords()
+}
+
+#[tauri::command]
+fn get_password(state: State<'_, VaultState>, id: i64) -> ApiResponse<PasswordEntry> {
+    let mut g = state.lock().unwrap();
+    g.get_password(id)
+}
+
+#[tauri::command]
+fn search_passwords(state: State<'_, VaultState>, query: SearchQuery) -> ApiResponse<Vec<PasswordEntry>> {
+    let mut g = state.lock().unwrap();
+    g.search_passwords(query)
+}
+
+#[tauri::command]
+fn update_password(state: State<'_, VaultState>, password: UpdatePassword) -> ApiResponse<PasswordEntry> {
+    let mut g = state.lock().unwrap();
+    g.update_password(password)
+}
+
+#[tauri::command]
+fn delete_password(state: State<'_, VaultState>, id: i64) -> ApiResponse<()> {
+    let mut g = state.lock().unwrap();
+    g.delete_password(id)
+}
+
+#[tauri::command]
+fn get_password_stats(state: State<'_, VaultState>) -> ApiResponse<PasswordStats> {
+    let mut g = state.lock().unwrap();
+    g.get_password_stats()
+}
+
+#[tauri::command]
+fn export_passwords(state: State<'_, VaultState>) -> ApiResponse<String> {
+    let mut g = state.lock().unwrap();
+    g.export_passwords()
+}
+
+#[tauri::command]
+fn import_passwords(state: State<'_, VaultState>, data: String) -> ApiResponse<ImportResult> {
+    let mut g = state.lock().unwrap();
+    g.import_passwords(data)
+}
+
+#[tauri::command]
+fn export_backup(state: State<'_, VaultState>) -> ApiResponse<String> {
+    let mut g = state.lock().unwrap();
+    g.export_backup()
+}
+
+#[tauri::command]
+fn restore_backup(state: State<'_, VaultState>, data: String, master_password: String) -> ApiResponse<ImportResult> {
+    let mut g = state.lock().unwrap();
+    g.restore_backup(data, master_password)
+}
+
+#[tauri::command]
+fn export_encrypted(state: State<'_, VaultState>, export_password: String) -> ApiResponse<String> {
+    let mut g = state.lock().unwrap();
+    g.export_encrypted(&export_password)
+}
+
+#[tauri::command]
+fn import_encrypted(state: State<'_, VaultState>, data: String, export_password: String) -> ApiResponse<ImportResult> {
+    let mut g = state.lock().unwrap();
+    g.import_encrypted(data, export_password)
+}
+
+#[tauri::command]
+fn export_passwords_csv(state: State<'_, VaultState>) -> ApiResponse<String> {
+    let mut g = state.lock().unwrap();
+    g.export_passwords_csv()
+}
+
+#[tauri::command]
+fn export_selected(state: State<'_, VaultState>, ids: Vec<i64>, format: String) -> ApiResponse<String> {
+    let mut g = state.lock().unwrap();
+    g.export_selected(ids, format)
+}
+
+#[tauri::command]
+fn check_password_strength(state: State<'_, VaultState>, password: String) -> ApiResponse<PasswordStrengthResult> {
+    let g = state.lock().unwrap();
+    g.check_password_strength(&password)
+}
+
+#[tauri::command]
+fn get_password_policy(state: State<'_, VaultState>) -> ApiResponse<PasswordPolicy> {
+    let g = state.lock().unwrap();
+    g.get_password_policy()
+}
+
+#[tauri::command]
+fn get_expiring_passwords(state: State<'_, VaultState>, within_days: i64) -> ApiResponse<Vec<PasswordExpiryInfo>> {
+    let mut g = state.lock().unwrap();
+    g.get_expiring_passwords(within_days)
+}
+
+#[tauri::command]
+fn get_audit_logs(state: State<'_, VaultState>) -> ApiResponse<Vec<AuditLogEntry>> {
+    let g = state.lock().unwrap();
+    g.get_audit_logs()
+}
+
+#[tauri::command]
+fn purge_old_audit_logs(state: State<'_, VaultState>, days: i64) -> ApiResponse<usize> {
+    let mut g = state.lock().unwrap();
+    g.purge_old_audit_logs(days)
+}
+
+#[tauri::command]
+fn check_integrity(state: State<'_, VaultState>) -> ApiResponse<IntegrityReport> {
+    let mut g = state.lock().unwrap();
+    g.check_integrity()
 }
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // 创建数据库状态
-            let db_state = DatabaseState::new();
-            app.manage(db_state);
+            // 解析应用数据目录（跨平台）
+            let app_dir = app
+                .path()
+                .app_data_dir()
+                .expect("无法解析应用数据目录");
+            std::fs::create_dir_all(&app_dir).ok();
+            let config_dir = app_dir.join("config");
+            std::fs::create_dir_all(&config_dir).ok();
+            let db_path = app_dir.join("securepass.db");
 
-            // 创建菜单
-            let quit = MenuItem::with_id(app.handle(), "quit", "Quit", true, None::<&str>)?;
-            let menu = MenuBuilder::new(app.handle())
-                .item(&quit)
-                .build()?;
+            // 管理保险库运行时（Mutex 保证 Send+Sync）
+            app.manage(Mutex::new(VaultRuntime::new(config_dir, db_path)));
 
-            // 创建系统托盘
-            let _tray = TrayIconBuilder::with_id("main-tray")
+            // 主窗口
+            let _window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("SecurePass - 密码管理器")
+            .inner_size(900.0, 700.0)
+            .min_inner_size(600.0, 500.0)
+            // 设不透明背景，避免某些 Linux/无合成器环境下 WebView 渲染为黑方块
+            .background_color(tauri::window::Color(255, 255, 255, 255))
+            .build()
+            .expect("创建主窗口失败");
+
+            // 系统托盘
+            let quit = tauri::menu::MenuItem::with_id(
+                app,
+                "quit",
+                "退出 SecurePass",
+                true,
+                None::<&str>,
+            )
+            .expect("创建菜单项失败");
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .items(&[&quit])
+                .build()
+                .expect("创建菜单失败");
+
+            let _tray = tauri::tray::TrayIconBuilder::with_id("securepass-tray")
+                .icon(
+                    app.default_window_icon()
+                        .expect("缺少默认窗口图标")
+                        .clone(),
+                )
                 .menu(&menu)
-                .tooltip("SecurePass")
-                .icon(app.default_window_icon().unwrap().clone())
-                .on_menu_event(move |app, event| {
-                    match event.id().as_ref() {
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| {
+                    if event.id().as_ref() == "quit" {
+                        app.exit(0);
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
-                    match event {
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            position: _,
-                            size: _,
-                        } => {
-                            if let Some(window) = tray.get_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
-                        TrayIconEvent::Click {
-                            button: MouseButton::Right,
-                            position: _,
-                            size: _,
-                        } => {
-                            // 显示右键菜单
-                        }
-                        _ => {}
                     }
                 })
-                .build(app)?;
-
-            // 创建主窗口
-            let window = tauri::WindowBuilder::new(app, "main", tauri::WindowUrl::App("index.html".into()))
-                .title("SecurePass - Password Manager")
-                .inner_size(900.0, 700.0)
-                .min_inner_size(600.0, 500.0)
-                .build()?;
+                .build(app)
+                .expect("创建托盘失败");
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            setup_master_password,
+            is_master_password_set,
+            unlock,
+            lock,
+            change_master_password,
             add_password,
             get_passwords,
+            get_password,
+            search_passwords,
+            update_password,
             delete_password,
-            show_notification,
+            get_password_stats,
+            export_passwords,
+            export_passwords_csv,
+            export_selected,
+            import_passwords,
+            export_backup,
+            restore_backup,
+            export_encrypted,
+            import_encrypted,
+            get_audit_logs,
+            purge_old_audit_logs,
+            check_integrity,
+            check_password_strength,
+            get_password_policy,
+            get_expiring_passwords
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("运行 SecurePass 失败");
 }

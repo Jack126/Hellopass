@@ -1,10 +1,15 @@
-use crate::security::crypto::SecureCryptoEngine;
-use crate::security::key_management::{KeyManager, KeyManagerConfig};
+use crate::security::crypto::{SecureCryptoEngine, DEFAULT_PBKDF2_ITERATIONS};
+use crate::security::key_management::KeyManager;
 use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::fs::File;
 use std::io::{Read, Write};
+use base64::Engine;
 use thiserror::Error;
+
+/// 用于验证主密码的常量令牌：设置时用主密钥加密后持久化，验证时解密比对。
+/// 这样既验证了密码正确性，也保证 salt 与主密码对应（GCM 认证会拒绝错误密码或被篡改数据）。
+const VERIFY_TOKEN: &[u8] = b"SECUREPASS_MASTER_PASSWORD_VERIFY_V1";
 
 #[derive(Error, Debug)]
 pub enum MasterPasswordError {
@@ -18,6 +23,8 @@ pub enum MasterPasswordError {
     StorageCorrupted,
     #[error("IO错误")]
     IoError(#[from] std::io::Error),
+    #[error("序列化错误")]
+    SerdeError(#[from] serde_json::Error),
 }
 
 /// 主密码管理器
@@ -29,58 +36,73 @@ pub struct MasterPasswordManager {
 impl MasterPasswordManager {
     pub fn new(config_dir: &str) -> Self {
         let config_path = Path::new(config_dir).join("master_password_config.json");
-        
         Self {
             key_manager: None,
             config_path: config_path.to_string_lossy().to_string(),
         }
     }
 
-    /// 检查是否已设置主密码
+    /// 是否已设置主密码（依据配置文件是否存在）
     pub fn is_set(&self) -> bool {
-        self.key_manager.is_some()
+        Path::new(&self.config_path).exists()
     }
 
     /// 设置主密码
     pub fn set_master_password(&mut self, password: &str) -> Result<(), MasterPasswordError> {
-        // 验证密码强度
-        if !self.validate_password_strength(password) {
+        if !self.validate_password_strength_inner(password) {
             return Err(MasterPasswordError::WeakPassword);
         }
 
-        // 创建新的密钥管理器
-        let key_manager = KeyManager::new(password)
+        let key_manager = KeyManager::new(password, DEFAULT_PBKDF2_ITERATIONS)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
-        
-        // 保存配置
-        self.save_config(password)?;
-        
+
+        // 生成验证令牌密文（用当前主密钥加密 VERIFY_TOKEN），并持久化 salt + 令牌
+        let engine = key_manager.get_crypto_engine();
+        let salt = engine.get_salt().to_vec();
+        let token_ct = engine.encrypt(VERIFY_TOKEN)
+            .map_err(|_| MasterPasswordError::StorageCorrupted)?;
+
+        let config = MasterPasswordConfig {
+            created_at: chrono::Utc::now().to_rfc3339(),
+            algorithm: "AES-256-GCM".to_string(),
+            iterations: DEFAULT_PBKDF2_ITERATIONS,
+            salt,
+            verify_token: base64::engine::general_purpose::STANDARD.encode(&token_ct),
+        };
+        self.save_config(&config)?;
+
         self.key_manager = Some(key_manager);
         Ok(())
     }
 
-    /// 验证主密码
+    /// 验证主密码：用密码 + 持久化 salt 重建引擎并解密验证令牌。
+    /// GCM 认证失败（密码错误或数据被篡改）将返回 IncorrectPassword。
     pub fn verify_password(&mut self, password: &str) -> Result<(), MasterPasswordError> {
         if !self.is_set() {
             return Err(MasterPasswordError::NotSet);
         }
 
-        // 尝试加载配置
         let config = self.load_config()?;
-        
-        // 尝试创建密钥管理器
-        let key_manager = KeyManager::from_existing(password, KeyManagerConfig {
-            algorithm: "PBKDF2-HMAC-SHA256".to_string(),
-            iterations: 100_000,
-            salt_length: 32,
-        })
-        .map_err(|_| MasterPasswordError::IncorrectPassword)?;
-        
+
+        let engine = SecureCryptoEngine::new_with_iterations(password, Some(config.salt.as_slice()), config.iterations)
+            .map_err(|_| MasterPasswordError::IncorrectPassword)?;
+
+        let token_ct = base64::engine::general_purpose::STANDARD.decode(&config.verify_token)
+            .map_err(|_| MasterPasswordError::StorageCorrupted)?;
+        let plaintext = engine.decrypt(&token_ct)
+            .map_err(|_| MasterPasswordError::IncorrectPassword)?;
+
+        if plaintext != VERIFY_TOKEN {
+            return Err(MasterPasswordError::IncorrectPassword);
+        }
+
+        // 验证通过：构建正式密钥管理器供后续使用
+        let key_manager = KeyManager::from_existing(password, config.salt.as_slice(), config.iterations)
+            .map_err(|_| MasterPasswordError::IncorrectPassword)?;
         self.key_manager = Some(key_manager);
         Ok(())
     }
 
-    /// 获取加密引擎
     pub fn get_crypto_engine(&self) -> Result<&SecureCryptoEngine, MasterPasswordError> {
         self.key_manager
             .as_ref()
@@ -91,146 +113,114 @@ impl MasterPasswordManager {
     /// 导出加密数据
     pub fn export_encrypted_data(&self, data: &[u8]) -> Result<Vec<u8>, MasterPasswordError> {
         let crypto_engine = self.get_crypto_engine()?;
-        
-        // 加密数据
         let encrypted_data = crypto_engine.encrypt(data)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
-        
-        // 创建导出包
         let export_package = ExportPackage {
             version: "1.0".to_string(),
-            algorithm: "AES-256-CTR".to_string(),
+            algorithm: "AES-256-GCM".to_string(),
             salt: crypto_engine.get_salt().to_vec(),
-            encrypted_data: base64::encode(encrypted_data),
+            encrypted_data: base64::engine::general_purpose::STANDARD.encode(&encrypted_data),
             timestamp: chrono::Utc::now().to_rfc3339(),
             checksum: self.calculate_checksum(&encrypted_data),
         };
-        
         Ok(serde_json::to_vec(&export_package)?)
     }
 
     /// 导入加密数据
     pub fn import_encrypted_data(&mut self, password: &str, export_data: &[u8]) -> Result<Vec<u8>, MasterPasswordError> {
-        // 解析导出包
         let export_package: ExportPackage = serde_json::from_slice(export_data)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
-        
-        // 验证导出包
         if export_package.version != "1.0" {
             return Err(MasterPasswordError::StorageCorrupted);
         }
-        
-        // 验证校验和
-        let encrypted_data = base64::decode(&export_package.encrypted_data)
+        let encrypted_data = base64::engine::general_purpose::STANDARD.decode(&export_package.encrypted_data)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
-        
         if !self.verify_checksum(&encrypted_data, &export_package.checksum) {
             return Err(MasterPasswordError::StorageCorrupted);
         }
-        
-        // 使用主密码创建临时加密引擎
-        let temp_crypto = SecureCryptoEngine::new(password, Some(&export_package.salt))
+        let temp_crypto = SecureCryptoEngine::new_with_iterations(password, Some(export_package.salt.as_slice()), DEFAULT_PBKDF2_ITERATIONS)
             .map_err(|_| MasterPasswordError::IncorrectPassword)?;
-        
-        // 解密数据
-        let decrypted_data = temp_crypto.decrypt_gcm(&encrypted_data)
+        let decrypted_data = temp_crypto.decrypt(&encrypted_data)
             .map_err(|_| MasterPasswordError::IncorrectPassword)?;
-        
         Ok(decrypted_data)
     }
 
-    /// 修改主密码
+    /// 修改主密码（会重新派生密钥，旧 salt/验证令牌被覆盖）
     pub fn change_password(&mut self, old_password: &str, new_password: &str) -> Result<(), MasterPasswordError> {
-        // 验证旧密码
         self.verify_password(old_password)?;
-        
-        // 验证新密码强度
-        if !self.validate_password_strength(new_password) {
+        if !self.validate_password_strength_inner(new_password) {
             return Err(MasterPasswordError::WeakPassword);
         }
-        
-        // 重新设置主密码
         self.set_master_password(new_password)?;
         Ok(())
     }
 
-    /// 删除主密码（删除所有数据）
     pub fn delete_master_password(&mut self) -> Result<(), MasterPasswordError> {
-        // 删除配置文件
-        if std::path::Path::new(&self.config_path).exists() {
+        if Path::new(&self.config_path).exists() {
             std::fs::remove_file(&self.config_path)?;
         }
-        
         self.key_manager = None;
         Ok(())
     }
 
-    /// 验证密码强度
     pub fn validate_password_strength_inner(&self, password: &str) -> bool {
-        // 最小长度 12
         if password.len() < 12 {
             return false;
         }
-        
-        // 必须包含大小写字母、数字、特殊字符
         let has_upper = password.chars().any(|c| c.is_uppercase());
         let has_lower = password.chars().any(|c| c.is_lowercase());
         let has_digit = password.chars().any(|c| c.is_digit(10));
         let has_special = password.chars().any(|c| !c.is_alphanumeric());
-        
         has_upper && has_lower && has_digit && has_special
     }
 
-    /// 保存配置
-    fn save_config(&self, password: &str) -> Result<(), MasterPasswordError> {
-        let config = MasterPasswordConfig {
-            created_at: chrono::Utc::now().to_rfc3339(),
-            algorithm: "PBKDF2-HMAC-SHA256".to_string(),
-            iterations: 100_000,
-            salt_length: 32,
-        };
-        
-        let config_json = serde_json::to_string(&config)?;
+    fn save_config(&self, config: &MasterPasswordConfig) -> Result<(), MasterPasswordError> {
+        let config_json = serde_json::to_string(config)?;
         let mut file = File::create(&self.config_path)?;
         file.write_all(config_json.as_bytes())?;
-        
+        // 配置文件含 salt 与主密码验证令牌，权限收紧为 0600
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = std::fs::metadata(&self.config_path) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&self.config_path, perms);
+            }
+        }
         Ok(())
     }
 
-    /// 加载配置
     fn load_config(&self) -> Result<MasterPasswordConfig, MasterPasswordError> {
         let mut file = File::open(&self.config_path)?;
         let mut content = String::new();
         file.read_to_string(&mut content)?;
-        
         let config: MasterPasswordConfig = serde_json::from_str(&content)
             .map_err(|_| MasterPasswordError::StorageCorrupted)?;
-        
         Ok(config)
     }
 
-    /// 计算校验和
     fn calculate_checksum(&self, data: &[u8]) -> String {
         use sha2::{Sha256, Digest};
-        let hasher = Sha256::new();
+        let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
     }
 
-    /// 验证校验和
     fn verify_checksum(&self, data: &[u8], expected_checksum: &str) -> bool {
-        let actual_checksum = self.calculate_checksum(data);
-        actual_checksum == expected_checksum
+        self.calculate_checksum(data) == expected_checksum
     }
 }
 
-/// 主密码配置
 #[derive(Serialize, Deserialize)]
 struct MasterPasswordConfig {
     created_at: String,
+    algorithm: String,
+    iterations: u32,
+    salt: Vec<u8>,
+    verify_token: String,
 }
 
-/// 导出包结构
 #[derive(Serialize, Deserialize)]
 struct ExportPackage {
     version: String,
