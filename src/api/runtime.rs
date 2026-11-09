@@ -62,7 +62,8 @@ impl VaultRuntime {
             failed_attempts: 0,
             lockout_until: None,
             last_activity: None,
-            session_timeout: Duration::seconds(30),
+            // 启动器形态下默认不自动锁定；设置窗里可改为 5/15/30 分钟
+            session_timeout: Duration::zero(),
             max_attempts: 5,
             lockout_duration: Duration::minutes(30),
             integrity_warning: None,
@@ -300,11 +301,13 @@ impl VaultRuntime {
         if self.vault.is_none() {
             return false;
         }
-        if let Some(t) = self.last_activity {
-            if Utc::now() - t > self.session_timeout {
-                self.vault = None;
-                self.last_activity = None;
-                return false;
+        if self.session_timeout > Duration::zero() {
+            if let Some(t) = self.last_activity {
+                if Utc::now() - t > self.session_timeout {
+                    self.vault = None;
+                    self.last_activity = None;
+                    return false;
+                }
             }
         }
         true
@@ -318,9 +321,13 @@ impl VaultRuntime {
     }
 
     /// 调整空闲超时（秒），由前端「自动锁定」设置同步进来。
-    /// 下限 10 秒、上限 300 秒（5 分钟），防止误设成过短或过长。
+    /// 0 表示不自动锁定；其余下限 10 秒、上限 300 秒，防止误设成过短或过长。
     pub fn set_session_timeout(&mut self, timeout_seconds: i64) {
-        self.session_timeout = Duration::seconds(timeout_seconds.clamp(10, 300));
+        self.session_timeout = if timeout_seconds <= 0 {
+            Duration::zero()
+        } else {
+            Duration::seconds(timeout_seconds.clamp(10, 300))
+        };
     }
 
     /// 配置会话安全参数（用于测试或按策略调整）。
@@ -531,6 +538,35 @@ impl VaultRuntime {
         };
         self.refresh_session();
         Ok(value)
+    }
+
+    /// 详情面板：返回备注等字段，但不含密码（密码走 reveal_password）。
+    pub fn entry_detail(&mut self, id: i64) -> AppResult<EntryDetail> {
+        if !self.enforce_session() {
+            return Err(AppError::Message("保险库已锁定，请先解锁主密码".to_string()));
+        }
+        let detail = {
+            let vault = self
+                .vault
+                .as_ref()
+                .ok_or_else(|| AppError::Message("保险库已锁定，请先解锁主密码".to_string()))?;
+            let e = vault.get_password(id)?;
+            EntryDetail {
+                id: e.id.unwrap_or(id),
+                site_name: e.site_name,
+                site_url: e.site_url,
+                username: e.username,
+                notes: e.notes,
+                tags: e.tags,
+                category: e.category,
+                created_at: e.created_at,
+                updated_at: e.updated_at,
+                last_accessed: e.last_accessed,
+                access_count: e.access_count,
+            }
+        };
+        self.refresh_session();
+        Ok(detail)
     }
 
     /// 详情页显式查看密码：唯一向界面返回明文密码的入口，调用方须在收起时丢弃。
@@ -1582,8 +1618,10 @@ mod tests {
     fn session_timeout_defaults_and_clamps() {
         let (db, cfg) = tmp();
         let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
-        // 默认 30 秒
-        assert_eq!(rt.session_timeout.num_seconds(), 30);
+        // 启动器默认不自动锁定
+        assert_eq!(rt.session_timeout.num_seconds(), 0);
+        rt.set_session_timeout(0);
+        assert_eq!(rt.session_timeout.num_seconds(), 0);
         // 下限 10 秒
         rt.set_session_timeout(1);
         assert_eq!(rt.session_timeout.num_seconds(), 10);
@@ -1603,6 +1641,7 @@ mod tests {
         let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
         rt.setup("StrongPass123!");
         assert!(rt.unlock("StrongPass123!").success);
+        rt.set_session_timeout(10);
         rt.last_activity = Some(chrono::Utc::now() - chrono::Duration::hours(2));
         let resp = rt.get_passwords();
         assert!(!resp.success, "should require re-unlock after timeout");

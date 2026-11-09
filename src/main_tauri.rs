@@ -7,18 +7,27 @@ mod api;
 mod utils;
 mod error;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use crate::api::runtime::VaultRuntime;
 use crate::api::dto::*;
 use crate::security::policies::PasswordStrengthResult;
 
 type VaultState = Mutex<VaultRuntime>;
+
+/// 启动器的临时开关：口令输入/编辑时暂停「失焦自动收起」。
+#[derive(Default)]
+struct LauncherFlags {
+    suppress_hide: AtomicBool,
+}
 
 #[tauri::command]
 fn setup_master_password(state: State<'_, VaultState>, master_password: String) -> ApiResponse<()> {
@@ -134,6 +143,16 @@ fn copy_secret(
     ApiResponse::ok(())
 }
 
+/// 详情面板数据（不含密码）。
+#[tauri::command]
+fn get_entry_detail(state: State<'_, VaultState>, id: i64) -> ApiResponse<EntryDetail> {
+    let mut g = state.lock().unwrap();
+    match g.entry_detail(id) {
+        Ok(d) => ApiResponse::ok(d),
+        Err(e) => ApiResponse::err_message(e.to_string()),
+    }
+}
+
 /// 详情页显式查看密码：唯一向界面返回明文密码的入口。
 #[tauri::command]
 fn reveal_password(state: State<'_, VaultState>, id: i64) -> ApiResponse<String> {
@@ -142,6 +161,115 @@ fn reveal_password(state: State<'_, VaultState>, id: i64) -> ApiResponse<String>
         Ok(s) => ApiResponse::ok(s.to_string()),
         Err(e) => ApiResponse::err_message(e.to_string()),
     }
+}
+
+#[tauri::command]
+fn hide_launcher(app: AppHandle) -> ApiResponse<()> {
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.hide();
+        let _ = app.emit("launcher-hidden", ());
+    }
+    ApiResponse::ok(())
+}
+
+#[tauri::command]
+fn set_suppress_hide(app: AppHandle, suppress: bool) -> ApiResponse<()> {
+    if let Some(flags) = app.try_state::<LauncherFlags>() {
+        flags.suppress_hide.store(suppress, Ordering::Relaxed);
+    }
+    ApiResponse::ok(())
+}
+
+fn notify(app: &AppHandle, body: &str) {
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("SecurePass")
+        .body(body)
+        .show()
+    {
+        crate::utils::log::warn("notify", &format!("系统通知发送失败: {}", e));
+    }
+}
+
+fn write_secret_file(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    std::fs::write(path, content.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+    Ok(())
+}
+
+/// 托盘导入：明文数据直接导入；.spb 需要口令，交给启动器弹口令输入。
+#[tauri::command]
+fn import_from_path(
+    app: AppHandle,
+    state: State<'_, VaultState>,
+    path: String,
+    password: Option<String>,
+) -> ApiResponse<ImportResult> {
+    let data = match std::fs::read_to_string(&path) {
+        Ok(d) => d,
+        Err(e) => return ApiResponse::err_message(format!("读取文件失败: {}", e)),
+    };
+    let mut g = state.lock().unwrap();
+    let result = if path.to_lowercase().ends_with(".spb") {
+        g.import_encrypted(data, password.unwrap_or_default())
+    } else {
+        g.import_passwords(data)
+    };
+    if let Some(r) = &result.data {
+        notify(
+            &app,
+            &format!(
+                "导入 {} 条，跳过 {} 条重复",
+                r.imported_count, r.skipped_count
+            ),
+        );
+    }
+    result
+}
+
+/// 托盘导出：内容由后端生成，前端只负责收集导出密码和保存路径。
+#[tauri::command]
+fn export_to_path(
+    app: AppHandle,
+    state: State<'_, VaultState>,
+    path: String,
+    export_password: String,
+) -> ApiResponse<String> {
+    let content = {
+        let mut g = state.lock().unwrap();
+        match g.export_encrypted(&export_password, None) {
+            ApiResponse { success: true, data: Some(c), .. } => c,
+            ApiResponse { error, .. } => {
+                return ApiResponse::err_message(error.unwrap_or_else(|| "导出失败".into()))
+            }
+        }
+    };
+    match write_secret_file(std::path::Path::new(&path), &content) {
+        Ok(_) => {
+            notify(&app, "密码已导出");
+            ApiResponse::ok(path)
+        }
+        Err(e) => ApiResponse::err_message(format!("写入文件失败: {}", e)),
+    }
+}
+
+/// 调整启动器高度：搜索 420，详情/编辑 560。
+#[tauri::command]
+fn resize_launcher(app: AppHandle, height: f64) -> ApiResponse<()> {
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.set_size(tauri::LogicalSize::new(680.0, height));
+        let _ = w.center();
+    }
+    ApiResponse::ok(())
 }
 
 fn show_launcher(app: &AppHandle) {
@@ -352,6 +480,7 @@ fn main() {
 
             // 管理保险库运行时（Mutex 保证 Send+Sync）
             app.manage(Mutex::new(VaultRuntime::new(config_dir, db_path)));
+            app.manage(LauncherFlags::default());
 
             // 启动器窗口：常驻但不显示，热键唤出
             let _launcher = tauri::WebviewWindowBuilder::new(
@@ -371,6 +500,30 @@ fn main() {
             .center()
             .build()
             .expect("创建启动器窗口失败");
+
+            // 失焦自动收起（口令输入/编辑时由前端暂停）
+            let handle = app.handle().clone();
+            let _ = _launcher.on_window_event(move |event| match event {
+                // 启动器窗口永不销毁，Alt+F4 只收起
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    if let Some(w) = handle.get_webview_window("launcher") {
+                        let _ = w.hide();
+                    }
+                }
+                tauri::WindowEvent::Focused(false) => {
+                    if let Some(flags) = handle.try_state::<LauncherFlags>() {
+                        if flags.suppress_hide.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                    if let Some(w) = handle.get_webview_window("launcher") {
+                        let _ = w.hide();
+                        let _ = handle.emit("launcher-hidden", ());
+                    }
+                }
+                _ => {}
+            });
 
             // 全局热键：Ctrl+Alt+Space
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
@@ -421,14 +574,63 @@ fn main() {
                             let _ = w.hide();
                         }
                     }
-                    // 导入/导出需要文件对话框和口令输入，交由启动器前端继续流程
+                    // 导入/导出：原生文件框选路径，.spb 的口令交给启动器收集
                     "import" => {
-                        let _ = app.emit("tray-import", ());
-                        show_launcher(app);
+                        let handle = app.clone();
+                        app.dialog()
+                            .file()
+                            .set_title("选择要导入的文件")
+                            .add_filter("SecurePass 导出包", &["spb"])
+                            .add_filter("明文数据", &["json", "csv"])
+                            .pick_file(move |picked| {
+                                let Some(fp) = picked else { return };
+                                let Ok(path) = fp.into_path() else { return };
+                                let path_str = path.to_string_lossy().to_string();
+                                if path_str.to_lowercase().ends_with(".spb") {
+                                    show_launcher(&handle);
+                                    let _ = handle.emit(
+                                        "tray-prompt",
+                                        serde_json::json!({ "kind": "import", "path": path_str }),
+                                    );
+                                } else {
+                                    match std::fs::read_to_string(&path) {
+                                        Ok(text) => {
+                                            if let Some(state) = handle.try_state::<VaultState>() {
+                                                let res = state.lock().unwrap().import_passwords(text);
+                                                if let Some(r) = res.data {
+                                                    notify(&handle, &format!(
+                                                        "导入 {} 条，跳过 {} 条重复",
+                                                        r.imported_count, r.skipped_count
+                                                    ));
+                                                } else if let Some(e) = res.error {
+                                                    notify(&handle, &format!("导入失败: {}", e));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => notify(&handle, &format!("读取文件失败: {}", e)),
+                                    }
+                                }
+                            });
                     }
                     "export" => {
-                        let _ = app.emit("tray-export", ());
-                        show_launcher(app);
+                        let handle = app.clone();
+                        app.dialog()
+                            .file()
+                            .set_title("导出加密密码包")
+                            .set_file_name("securepass-export.spb")
+                            .add_filter("SecurePass 导出包", &["spb"])
+                            .save_file(move |picked| {
+                                let Some(fp) = picked else { return };
+                                let Ok(path) = fp.into_path() else { return };
+                                show_launcher(&handle);
+                                let _ = handle.emit(
+                                    "tray-prompt",
+                                    serde_json::json!({
+                                        "kind": "export",
+                                        "path": path.to_string_lossy(),
+                                    }),
+                                );
+                            });
                     }
                     "settings" => open_settings(app),
                     "quit" => app.exit(0),
@@ -477,7 +679,13 @@ fn main() {
             list_entry_summaries,
             vault_status,
             copy_secret,
-            reveal_password
+            reveal_password,
+            import_from_path,
+            export_to_path,
+            get_entry_detail,
+            resize_launcher,
+            hide_launcher,
+            set_suppress_hide
         ])
         .run(tauri::generate_context!())
         .expect("运行 SecurePass 失败");

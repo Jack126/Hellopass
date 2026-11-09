@@ -75,6 +75,22 @@ pub struct EntrySummary {
     pub pinyin_initials: String,
 }
 
+/// 详情面板用：含备注，但不含密码明文/密文；密码只在显式 reveal 时单独取。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryDetail {
+    pub id: i64,
+    pub site_name: String,
+    pub site_url: String,
+    pub username: String,
+    pub notes: Option<String>,
+    pub tags: Vec<String>,
+    pub category: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_accessed: Option<String>,
+    pub access_count: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewPassword {
     pub site_name: String,

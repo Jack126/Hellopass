@@ -15,17 +15,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.1.0",
-    "axios": "^1.6.0",
-    "crypto-js": "^4.2.0",
-    "dayjs": "^1.11.0",
-    "element-plus": "^2.4.0",
-    "vue": "^3.3.0",
-    "vue-router": "^4.2.0",
-    "vuex": "^4.1.0"
+    "vue": "^3.3.0"
   },
   "devDependencies": {
-    "@types/crypto-js": "^4.2.0",
     "@types/node": "^20.0.0",
     "@vitejs/plugin-vue": "^4.5.0",
     "@vue/test-utils": "^2.5.1",

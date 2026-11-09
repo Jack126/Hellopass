@@ -29,10 +29,13 @@ export default defineConfig({
     sourcemap: true,
     minify: 'esbuild',
     rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        setting: resolve(__dirname, 'setting.html'),
+      },
       output: {
         manualChunks: {
-          'element-plus': ['element-plus'],
-          'vue-vendor': ['vue', 'vue-router', 'vuex'],
+          'vue-vendor': ['vue'],
         },
       },
     },
