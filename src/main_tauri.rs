@@ -29,6 +29,90 @@ struct LauncherFlags {
     suppress_hide: AtomicBool,
 }
 
+const DEFAULT_ACCEL: &str = "control+alt+space";
+
+#[derive(Clone, serde::Serialize)]
+struct HotkeyInfo {
+    accelerator: String,
+    display: String,
+}
+
+struct HotkeyStateInner {
+    shortcut: Shortcut,
+    display: String,
+    suspended: bool,
+    path: std::path::PathBuf,
+}
+
+struct HotkeyState(Mutex<HotkeyStateInner>);
+
+fn key_label(code: &Code) -> String {
+    let s = code.to_string();
+    if let Some(rest) = s.strip_prefix("Key") {
+        return rest.to_string();
+    }
+    if let Some(rest) = s.strip_prefix("Digit") {
+        return rest.to_string();
+    }
+    if let Some(rest) = s.strip_prefix("Numpad") {
+        return format!("Num{}", rest);
+    }
+    s
+}
+
+fn hotkey_display(sc: &Shortcut) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if sc.mods.contains(Modifiers::SHIFT) {
+        parts.push("Shift".into());
+    }
+    if sc.mods.contains(Modifiers::CONTROL) {
+        parts.push("Ctrl".into());
+    }
+    if sc.mods.contains(Modifiers::ALT) {
+        parts.push("Alt".into());
+    }
+    if sc.mods.contains(Modifiers::SUPER) {
+        parts.push("Win".into());
+    }
+    parts.push(key_label(&sc.key));
+    parts.join(" + ")
+}
+
+fn parse_hotkey(accel: &str) -> Result<Shortcut, String> {
+    let sc: Shortcut = accel
+        .trim()
+        .parse()
+        .map_err(|e| format!("无法识别的快捷键: {}", e))?;
+    let label = key_label(&sc.key);
+    let is_fkey =
+        label.len() > 1 && label.starts_with('F') && label[1..].chars().all(|c| c.is_ascii_digit());
+    if sc.mods.is_empty() && !is_fkey {
+        return Err("快捷键至少要带 Ctrl / Alt / Shift 之一（F1~F24 除外）".to_string());
+    }
+    Ok(sc)
+}
+
+fn info_of(sc: &Shortcut) -> HotkeyInfo {
+    HotkeyInfo {
+        accelerator: format!("{}", sc),
+        display: hotkey_display(sc),
+    }
+}
+
+fn load_saved_accel(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value.get("accelerator")?.as_str().map(|s| s.to_string())
+}
+
+fn save_accel(path: &std::path::Path, accel: &str) {
+    let body = serde_json::json!({ "accelerator": accel }).to_string();
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 #[tauri::command]
 fn setup_master_password(state: State<'_, VaultState>, master_password: String) -> ApiResponse<()> {
     let mut g = state.lock().unwrap();
@@ -180,6 +264,65 @@ fn set_suppress_hide(app: AppHandle, suppress: bool) -> ApiResponse<()> {
     ApiResponse::ok(())
 }
 
+#[tauri::command]
+fn get_hotkey(state: State<'_, HotkeyState>) -> ApiResponse<HotkeyInfo> {
+    let g = state.0.lock().unwrap();
+    ApiResponse::ok(info_of(&g.shortcut))
+}
+
+/// 开始录制：先注销当前热键，否则系统会把组合键截走，录制窗口收不到按键。
+#[tauri::command]
+fn begin_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiResponse<()> {
+    let mut g = state.0.lock().unwrap();
+    let _ = app.global_shortcut().unregister(g.shortcut.clone());
+    g.suspended = true;
+    ApiResponse::ok(())
+}
+
+#[tauri::command]
+fn end_hotkey_capture(app: AppHandle, state: State<'_, HotkeyState>) -> ApiResponse<()> {
+    let mut g = state.0.lock().unwrap();
+    if g.suspended {
+        if let Err(e) = app.global_shortcut().register(g.shortcut.clone()) {
+            crate::utils::log::error("hotkey", &format!("恢复热键失败: {}", e));
+        }
+        g.suspended = false;
+    }
+    ApiResponse::ok(())
+}
+
+#[tauri::command]
+fn set_hotkey(
+    app: AppHandle,
+    state: State<'_, HotkeyState>,
+    accelerator: String,
+) -> ApiResponse<HotkeyInfo> {
+    let new = match parse_hotkey(&accelerator) {
+        Ok(s) => s,
+        Err(e) => return ApiResponse::err_message(e),
+    };
+    let mut g = state.0.lock().unwrap();
+    let old = g.shortcut.clone();
+    let _ = app.global_shortcut().unregister(old.clone());
+    match app.global_shortcut().register(new.clone()) {
+        Ok(_) => {
+            g.shortcut = new.clone();
+            g.display = hotkey_display(&new);
+            g.suspended = false;
+            save_accel(&g.path, &format!("{}", new));
+            ApiResponse::ok(info_of(&new))
+        }
+        Err(e) => {
+            // 注册失败就把旧热键恢复回去，避免应用失去唤出方式
+            if let Err(restore) = app.global_shortcut().register(old.clone()) {
+                crate::utils::log::error("hotkey", &format!("恢复旧热键失败: {}", restore));
+            }
+            g.suspended = false;
+            ApiResponse::err_message(format!("注册失败：{}（可能被其他程序占用）", e))
+        }
+    }
+}
+
 fn notify(app: &AppHandle, body: &str) {
     if let Err(e) = app
         .notification()
@@ -297,7 +440,7 @@ fn open_settings(app: &AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    let _ = tauri::WebviewWindowBuilder::new(
+    if let Ok(win) = tauri::WebviewWindowBuilder::new(
         app,
         "settings",
         tauri::WebviewUrl::App("setting.html".into()),
@@ -306,7 +449,22 @@ fn open_settings(app: &AppHandle) {
     .inner_size(720.0, 600.0)
     .min_inner_size(640.0, 520.0)
     .background_color(tauri::window::Color(24, 24, 27, 255))
-    .build();
+    .build()
+    {
+        // 录制热键时旧热键被注销；若用户直接关窗，这里负责恢复，避免应用失去唤出方式
+        let handle = app.clone();
+        let _ = win.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = handle.try_state::<HotkeyState>() {
+                    let mut g = state.0.lock().unwrap();
+                    if g.suspended {
+                        let _ = handle.global_shortcut().register(g.shortcut.clone());
+                        g.suspended = false;
+                    }
+                }
+            }
+        });
+    }
 }
 
 #[tauri::command]
@@ -478,6 +636,8 @@ fn main() {
             #[cfg(not(debug_assertions))]
             let db_path = app_dir.join("securepass.db");
 
+            let hotkey_path = config_dir.join("hotkey.json");
+
             // 管理保险库运行时（Mutex 保证 Send+Sync）
             app.manage(Mutex::new(VaultRuntime::new(config_dir, db_path)));
             app.manage(LauncherFlags::default());
@@ -525,14 +685,31 @@ fn main() {
                 _ => {}
             });
 
-            // 全局热键：Ctrl+Alt+Space
-            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
-            if let Err(e) = app.global_shortcut().register(shortcut) {
+            // 全局热键：优先用设置里保存的组合，注册失败则退回默认值
+            let default_shortcut = parse_hotkey(DEFAULT_ACCEL).expect("默认热键必须可解析");
+            let saved = load_saved_accel(&hotkey_path).unwrap_or_else(|| DEFAULT_ACCEL.to_string());
+            let mut chosen = parse_hotkey(&saved).unwrap_or_else(|_| default_shortcut.clone());
+            if let Err(e) = app.global_shortcut().register(chosen.clone()) {
                 crate::utils::log::error(
                     "hotkey",
-                    &format!("全局热键 Ctrl+Alt+Space 注册失败: {}", e),
+                    &format!("注册热键 {} 失败: {}", hotkey_display(&chosen), e),
                 );
+                if chosen != default_shortcut {
+                    chosen = default_shortcut.clone();
+                    if let Err(e2) = app.global_shortcut().register(chosen.clone()) {
+                        crate::utils::log::error(
+                            "hotkey",
+                            &format!("注册默认热键失败: {}", e2),
+                        );
+                    }
+                }
             }
+            app.manage(HotkeyState(Mutex::new(HotkeyStateInner {
+                display: hotkey_display(&chosen),
+                shortcut: chosen,
+                suspended: false,
+                path: hotkey_path,
+            })));
 
             // 系统托盘菜单
             use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem};
@@ -685,7 +862,11 @@ fn main() {
             get_entry_detail,
             resize_launcher,
             hide_launcher,
-            set_suppress_hide
+            set_suppress_hide,
+            get_hotkey,
+            set_hotkey,
+            begin_hotkey_capture,
+            end_hotkey_capture
         ])
         .run(tauri::generate_context!())
         .expect("运行 SecurePass 失败");

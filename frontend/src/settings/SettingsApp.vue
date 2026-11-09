@@ -36,7 +36,18 @@
 
         <div class="card">
           <h2>全局热键</h2>
-          <p class="muted">当前：<code>Ctrl + Alt + Space</code></p>
+          <div class="hotkey-row">
+            <kbd class="hotkey">{{ hotkeyDisplay }}</kbd>
+            <button v-if="!recording" class="ghost" @click="startRecord">修改</button>
+            <button v-else class="ghost" @click="cancelRecord">取消</button>
+          </div>
+          <p v-if="recording" class="muted">
+            {{ capturedDisplay ? `将设置为 ${capturedDisplay}` : '请按下新的组合键（至少带 Ctrl / Alt / Shift，F1~F24 可单独使用）' }}
+          </p>
+          <div v-if="recording && capturedAccel" class="actions">
+            <button :disabled="savingHotkey" @click="saveHotkey">保存</button>
+          </div>
+          <p class="muted">录制期间当前热键会被临时注销；按 Esc 取消。</p>
         </div>
 
         <div class="card">
@@ -142,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { request } from '../shared/ipc';
 
 interface Integrity { sqlite_ok: boolean; db_size: number; baseline_ok: boolean; db_checksum: string }
@@ -166,6 +177,106 @@ const notice = ref('');
 const noticeKind = ref<'ok' | 'bad'>('ok');
 
 const autoLock = ref(0);
+const hotkeyDisplay = ref('Ctrl + Alt + Space');
+const recording = ref(false);
+const capturedAccel = ref('');
+const capturedDisplay = ref('');
+const savingHotkey = ref(false);
+
+const KEY_TOKENS: Record<string, string> = {
+  Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backquote: 'Backquote',
+  Minus: 'Minus', Equal: 'Equal', BracketLeft: 'BracketLeft', BracketRight: 'BracketRight',
+  Semicolon: 'Semicolon', Quote: 'Quote', Comma: 'Comma', Period: 'Period',
+  Slash: 'Slash', Backslash: 'Backslash',
+  ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Insert: 'Insert', Delete: 'Delete',
+};
+
+function codeToken(code: string): string {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  return KEY_TOKENS[code] ?? '';
+}
+
+function prettyToken(token: string): string {
+  if (/^[A-Z]$/.test(token)) return token;
+  if (/^[0-9]$/.test(token)) return token;
+  return token;
+}
+
+async function loadHotkey() {
+  const info = await guard(() => request<{ accelerator: string; display: string }>('get_hotkey'));
+  if (info) hotkeyDisplay.value = info.display;
+}
+
+function startRecord() {
+  capturedAccel.value = '';
+  capturedDisplay.value = '';
+  error.value = '';
+  recording.value = true;
+  void request('begin_hotkey_capture');
+  window.addEventListener('keydown', onRecordKey, true);
+  window.addEventListener('blur', onRecordBlur);
+}
+
+function stopRecord(restore: boolean) {
+  window.removeEventListener('keydown', onRecordKey, true);
+  window.removeEventListener('blur', onRecordBlur);
+  recording.value = false;
+  if (restore) void request('end_hotkey_capture');
+}
+
+function onRecordBlur() {
+  if (recording.value) stopRecord(true);
+}
+
+function onRecordKey(e: KeyboardEvent) {
+  if (!recording.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const mods: string[] = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Super');
+  if (e.key === 'Escape' && mods.length === 0) {
+    stopRecord(true);
+    return;
+  }
+  const token = codeToken(e.code);
+  if (!token) return; // 只按了修饰键
+  const isFKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(token);
+  if (!mods.length && !isFKey) {
+    error.value = '至少带一个修饰键（F1~F24 除外）';
+    return;
+  }
+  capturedAccel.value = [...mods, token].join('+');
+  capturedDisplay.value = [...mods.map((m) => (m === 'Super' ? 'Win' : m)), prettyToken(token)].join(' + ');
+  error.value = '';
+}
+
+async function saveHotkey() {
+  savingHotkey.value = true;
+  try {
+    const info = await request<{ accelerator: string; display: string }>('set_hotkey', {
+      accelerator: capturedAccel.value,
+    });
+    hotkeyDisplay.value = info.display;
+    stopRecord(false);
+    setNotice('热键已更新');
+  } catch (e) {
+    error.value = (e as Error).message;
+    stopRecord(true);
+  } finally {
+    savingHotkey.value = false;
+  }
+}
+
+function cancelRecord() {
+  stopRecord(true);
+}
+
 const oldPw = ref('');
 const newPw = ref('');
 const newPw2 = ref('');
@@ -326,8 +437,13 @@ async function loadAudit() {
   if (res) audit.value = res;
 }
 
+onBeforeUnmount(() => {
+  if (recording.value) void request('end_hotkey_capture');
+});
+
 onMounted(async () => {
   autoLock.value = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
+  await loadHotkey();
   const s = await guard(() => request<boolean>('vault_status'));
   unlocked.value = !!s;
   if (unlocked.value) {
