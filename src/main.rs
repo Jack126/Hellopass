@@ -9,9 +9,116 @@ mod api;
 mod utils;
 mod error;
 
+use std::path::PathBuf;
+
+use api::dto::NewPassword;
+use api::runtime::VaultRuntime;
 use database::Database;
+use rand::Rng;
+
+/// 演示数据：生成 count 条随机记录到一个全新的库（会创建主密码配置）。
+/// 用法：securepass_cli seed-demo <db> <config_dir> <master_password> <count>
+fn seed_demo(args: &[String]) {
+    if args.len() < 6 {
+        eprintln!("用法: securepass_cli seed-demo <db> <config_dir> <master_password> <count>");
+        std::process::exit(2);
+    }
+    let db = PathBuf::from(&args[2]);
+    let cfg = PathBuf::from(&args[3]);
+    let password = &args[4];
+    let count: usize = args[5].parse().expect("count 必须是数字");
+    if let Some(parent) = db.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::create_dir_all(&cfg).ok();
+
+    let mut rt = VaultRuntime::new(cfg, db);
+    let setup = rt.setup(password);
+    if !setup.success {
+        eprintln!("初始化失败: {:?}", setup.error);
+        std::process::exit(1);
+    }
+
+    let sites: &[(&str, &str)] = &[
+        ("GitHub", "https://github.com"),
+        ("GitLab", "https://gitlab.com"),
+        ("Google", "https://accounts.google.com"),
+        ("Microsoft", "https://login.microsoftonline.com"),
+        ("Apple ID", "https://appleid.apple.com"),
+        ("Steam", "https://store.steampowered.com"),
+        ("淘宝", "https://www.taobao.com"),
+        ("京东", "https://www.jd.com"),
+        ("支付宝", "https://www.alipay.com"),
+        ("微信", "https://wx.qq.com"),
+        ("QQ", "https://im.qq.com"),
+        ("微博", "https://weibo.com"),
+        ("知乎", "https://www.zhihu.com"),
+        ("豆瓣", "https://www.douban.com"),
+        ("B站", "https://www.bilibili.com"),
+        ("网易云音乐", "https://music.163.com"),
+        ("阿里云", "https://www.aliyun.com"),
+        ("腾讯云", "https://cloud.tencent.com"),
+        ("Cloudflare", "https://dash.cloudflare.com"),
+        ("Namecheap", "https://www.namecheap.com"),
+        ("Vercel", "https://vercel.com"),
+        ("Figma", "https://www.figma.com"),
+        ("Notion", "https://www.notion.so"),
+        ("Slack", "https://slack.com"),
+        ("Zoom", "https://zoom.us"),
+        ("PayPal", "https://www.paypal.com"),
+        ("Amazon", "https://www.amazon.com"),
+        ("Netflix", "https://www.netflix.com"),
+        ("Spotify", "https://www.spotify.com"),
+        ("Dropbox", "https://www.dropbox.com"),
+    ];
+    let tag_pool = ["工作", "个人", "金融", "社交", "开发", "购物", "娱乐"];
+    let charset: Vec<char> = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*"
+        .chars()
+        .collect();
+    let mut rng = rand::thread_rng();
+    let mut ok_count = 0usize;
+
+    for i in 0..count {
+        let (site, url) = sites[i % sites.len()];
+        let pwd: String = (0..18)
+            .map(|_| charset[rng.gen_range(0..charset.len())])
+            .collect();
+        let mut tags = vec![tag_pool[rng.gen_range(0..tag_pool.len())].to_string()];
+        if i % 4 == 0 {
+            tags.push("演示".to_string());
+        }
+        let notes = if i % 5 == 0 {
+            Some(format!("演示记录 #{}", i + 1))
+        } else {
+            None
+        };
+        let res = rt.add_password(NewPassword {
+            site_name: format!("{} {}", site, if i >= sites.len() { i / sites.len() + 1 } else { 1 }),
+            site_url: url.to_string(),
+            username: format!("user{:03}@example.com", i + 1),
+            password: pwd,
+            notes,
+            tags: Some(tags),
+            priority: Some((i % 4) as i32),
+        });
+        if res.success {
+            ok_count += 1;
+        } else {
+            eprintln!("第 {} 条失败: {:?}", i + 1, res.error);
+        }
+    }
+
+    println!("已生成 {} / {} 条演示记录", ok_count, count);
+    println!("主密码: {}", password);
+}
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("seed-demo") {
+        seed_demo(&args);
+        return;
+    }
+
     println!("SecurePass - 密码管理器");
     println!("========================");
     
