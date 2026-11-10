@@ -1,1 +1,0 @@
-Place bundled resources here.

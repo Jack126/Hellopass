@@ -30,15 +30,15 @@ passwd/
 │   │   ├── runtime.rs            # VaultRuntime：会话安全/CRUD/导入导出/审计
 │   │   └── mod.rs
 │   └── utils/
-│       ├── app_state.rs          # CLI 用的简单状态
-│       └── log.rs                # 统一日志
+│       ├── log.rs                # 统一日志
+│       ├── pinyin.rs             # 拼音首字母
+│       └── window_size.rs        # 启动器窗口尺寸计算
 ├── frontend/                     # Vue 3（无 UI 框架）
 │   └── src/
 │       ├── launcher/             # 热键搜索弹窗：Launcher.vue / fuzzy.ts / ipc.ts
 │       ├── settings/             # 托盘打开的设置窗：SettingsApp.vue
 │       └── shared/ipc.ts         # 不依赖 UI 库的 invoke 封装
 ├── icons/                        # 应用/托盘图标（png/ico/icns）
-├── assets/                       # 打包资源
 ├── capabilities/default.json     # Tauri 2 权限
 ├── tauri.conf.json               # Tauri 2 配置
 ├── Cargo.toml

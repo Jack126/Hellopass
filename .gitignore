@@ -17,7 +17,7 @@ node_modules/
 frontend/dist/
 
 # Tauri 生成的 schema / 临时测试报告
-/gen/schemas
+/gen/
 *-report-*.md
 test-results-*.log
 
