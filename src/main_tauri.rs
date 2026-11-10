@@ -27,6 +27,91 @@ struct LauncherFlags {
     suppress_hide: AtomicBool,
 }
 
+/// 窗口大小偏好（auto / compact / standard / large），落盘到 config/ui.json。
+struct UiPrefs {
+    preset: Mutex<String>,
+    path: std::path::PathBuf,
+}
+
+fn load_ui_preset(path: &std::path::Path) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return "auto".to_string();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return "auto".to_string();
+    };
+    value
+        .get("window_preset")
+        .and_then(|v| v.as_str())
+        .filter(|s| crate::utils::window_size::is_valid_preset(s))
+        .unwrap_or("auto")
+        .to_string()
+}
+
+fn save_ui_preset(path: &std::path::Path, preset: &str) {
+    let body = serde_json::json!({ "window_preset": preset }).to_string();
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+fn monitor_under_cursor(app: &AppHandle) -> Option<tauri::Monitor> {
+    let pos = app.cursor_position().ok()?;
+    app.monitor_from_point(pos.x, pos.y).ok().flatten()
+}
+
+/// 按当前偏好和显示器计算尺寸；expanded=详情/编辑态，place=把窗口摆到鼠标所在屏幕中央。
+fn apply_launcher_size(app: &AppHandle, expanded: bool, place: bool) {
+    let preset = app
+        .try_state::<UiPrefs>()
+        .map(|s| s.preset.lock().unwrap().clone())
+        .unwrap_or_else(|| "auto".to_string());
+
+    let monitor = if place {
+        monitor_under_cursor(app)
+    } else {
+        app.get_webview_window("launcher")
+            .and_then(|w| w.current_monitor().ok().flatten())
+            .or_else(|| monitor_under_cursor(app))
+    };
+
+    // 用物理像素计算，避免多显示器不同缩放比时 LogicalPosition 换算错位
+    let (phys_w, phys_h, pos_x, pos_y, scale) = match monitor {
+        Some(m) => (
+            m.size().width as f64,
+            m.size().height as f64,
+            m.position().x as f64,
+            m.position().y as f64,
+            m.scale_factor(),
+        ),
+        None => (1920.0, 1080.0, 0.0, 0.0, 1.0),
+    };
+    let monitor_w = phys_w / scale;
+    let monitor_h = phys_h / scale;
+
+    let computed = crate::utils::window_size::compute(&preset, monitor_w, monitor_h);
+    let width = computed.width;
+    let height = if expanded {
+        computed.tall_height
+    } else {
+        computed.base_height
+    };
+    let width_px = (width * scale).round() as u32;
+    let height_px = (height * scale).round() as u32;
+
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.set_size(tauri::PhysicalSize::new(width_px, height_px));
+        if place {
+            let x = pos_x + (phys_w - width_px as f64) / 2.0;
+            let y = pos_y + (phys_h - height_px as f64) / 2.0;
+            let _ = w.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32));
+        } else {
+            let _ = w.center();
+        }
+    }
+}
+
 /// 记录最近一次写进剪贴板的密码摘要，锁定时只在内容仍是它时才清空。
 #[derive(Default)]
 struct ClipboardGuard(Mutex<Option<String>>);
@@ -470,19 +555,36 @@ fn set_hotkey(
     }
 }
 
-/// 调整启动器高度：搜索 420，详情/编辑 560。
+/// expanded=true 用于详情/编辑态（更高的窗口）。
 #[tauri::command]
-fn resize_launcher(app: AppHandle, height: f64) -> ApiResponse<()> {
-    if let Some(w) = app.get_webview_window("launcher") {
-        let _ = w.set_size(tauri::LogicalSize::new(680.0, height));
-        let _ = w.center();
+fn resize_launcher(app: AppHandle, expanded: bool) -> ApiResponse<()> {
+    apply_launcher_size(&app, expanded, false);
+    ApiResponse::ok(())
+}
+
+#[tauri::command]
+fn get_window_preset(state: State<'_, UiPrefs>) -> ApiResponse<String> {
+    ApiResponse::ok(state.preset.lock().unwrap().clone())
+}
+
+#[tauri::command]
+fn set_window_preset(
+    app: AppHandle,
+    state: State<'_, UiPrefs>,
+    preset: String,
+) -> ApiResponse<()> {
+    if !crate::utils::window_size::is_valid_preset(&preset) {
+        return ApiResponse::err_message("未知的窗口大小");
     }
+    *state.preset.lock().unwrap() = preset.clone();
+    save_ui_preset(&state.path, &preset);
+    apply_launcher_size(&app, false, false);
     ApiResponse::ok(())
 }
 
 fn show_launcher(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("launcher") {
-        let _ = w.center();
+        apply_launcher_size(app, false, true);
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("launcher-shown", ());
@@ -772,11 +874,28 @@ fn main() {
             let db_path = app_dir.join("securepass.db");
 
             let hotkey_path = config_dir.join("hotkey.json");
+            let ui_path = config_dir.join("ui.json");
+            let ui_preset = load_ui_preset(&ui_path);
+            let initial_size = {
+                let h = app.handle().clone();
+                let (mw, mh) = monitor_under_cursor(&h)
+                    .map(|m| {
+                        let s = m.scale_factor();
+                        let sz = m.size().to_logical::<f64>(s);
+                        (sz.width, sz.height)
+                    })
+                    .unwrap_or((1920.0, 1080.0));
+                crate::utils::window_size::compute(&ui_preset, mw, mh)
+            };
 
             // 管理保险库运行时（Mutex 保证 Send+Sync）
             app.manage(Mutex::new(VaultRuntime::new(config_dir, db_path)));
             app.manage(LauncherFlags::default());
             app.manage(ClipboardGuard::default());
+            app.manage(UiPrefs {
+                preset: Mutex::new(ui_preset),
+                path: ui_path,
+            });
 
             // 启动器窗口：常驻但不显示，热键唤出
             let _launcher = tauri::WebviewWindowBuilder::new(
@@ -785,7 +904,7 @@ fn main() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("SecurePass")
-            .inner_size(680.0, 420.0)
+            .inner_size(initial_size.width, initial_size.base_height)
             .resizable(false)
             .decorations(false)
             .transparent(true)
@@ -938,6 +1057,8 @@ fn main() {
             reveal_password,
             get_entry_detail,
             resize_launcher,
+            get_window_preset,
+            set_window_preset,
             hide_launcher,
             set_suppress_hide,
             get_hotkey,

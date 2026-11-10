@@ -202,7 +202,7 @@ async function goSearch() {
   query.value = '';
   cursor.value = 0;
   await api.suppressHide(false);
-  await api.resize(420);
+  await api.resize(false);
   await nextTick();
   searchInput.value?.focus();
 }
@@ -347,7 +347,7 @@ async function openDetail(item: Summary) {
     revealed.value = null;
     confirmDelete.value = false;
     await api.suppressHide(false);
-    await api.resize(560);
+    await api.resize(true);
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -359,7 +359,7 @@ async function startNew() {
   mode.value = 'edit';
   error.value = '';
   await api.suppressHide(true);
-  await api.resize(560);
+  await api.resize(true);
 }
 
 async function startEdit() {
@@ -376,7 +376,7 @@ async function startEdit() {
   mode.value = 'edit';
   error.value = '';
   await api.suppressHide(true);
-  await api.resize(560);
+  await api.resize(true);
 }
 
 function cancelEdit() {
@@ -426,7 +426,7 @@ async function save() {
     }
     form.password = '';
     await api.suppressHide(false);
-    await api.resize(560);
+    await api.resize(true);
     await refresh();
   } catch (e) {
     error.value = (e as Error).message;

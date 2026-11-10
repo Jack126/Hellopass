@@ -37,6 +37,23 @@
         </div>
 
         <div class="card">
+          <h2>窗口大小</h2>
+          <label class="row">
+            搜索弹窗
+            <select v-model="windowPreset" @change="saveWindowPreset">
+              <option value="auto">自动（按屏幕）</option>
+              <option value="compact">紧凑</option>
+              <option value="standard">标准</option>
+              <option value="large">大</option>
+            </select>
+          </label>
+          <p class="muted">
+            自动模式按鼠标所在屏幕逻辑宽度的 35% 计算（限制在 560~900 px），
+            详情/编辑态自动加高；位置跟随鼠标所在显示器。
+          </p>
+        </div>
+
+        <div class="card">
           <h2>全局热键</h2>
           <div class="hotkey-row">
             <span class="hotkey-label">唤醒搜索</span>
@@ -207,6 +224,7 @@ const notice = ref('');
 const noticeKind = ref<'ok' | 'bad'>('ok');
 
 const autoLock = ref(0);
+const windowPreset = ref('auto');
 const wakeDisplay = ref('Ctrl + Alt + Space');
 const lockDisplay = ref('Ctrl + Shift + L');
 const wakeAccel = ref('control+alt+space');
@@ -443,6 +461,19 @@ function readFile(file: File): Promise<string> {
   });
 }
 
+async function loadWindowPreset() {
+  const preset = await guard(() => request<string>('get_window_preset'));
+  if (preset) windowPreset.value = preset;
+}
+
+async function saveWindowPreset() {
+  const ok = await guard(async () => {
+    await request('set_window_preset', { preset: windowPreset.value });
+    return true;
+  });
+  if (ok) setNotice('窗口大小已更新');
+}
+
 async function saveAutoLock() {
   localStorage.setItem('sp.autoLockMinutes', String(autoLock.value));
   const ok = await guard(() => request('set_session_timeout', { seconds: autoLock.value * 60 }));
@@ -616,6 +647,7 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   autoLock.value = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
   await loadHotkey();
+  await loadWindowPreset();
   window.addEventListener('focus', refreshLockState);
   unlistenLock = await listen('vault-locked', applyLocked);
   const s = await guard(() => request<boolean>('vault_status'));
