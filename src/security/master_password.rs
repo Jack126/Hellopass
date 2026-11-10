@@ -9,6 +9,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 /// 用于验证主密码的常量令牌：设置时用主密钥加密后持久化，验证时解密比对。
+/// 注意：字符串值沿用旧品牌名，改动会让已有保险库全部无法验证。
 /// 这样既验证了密码正确性，也保证 salt 与主密码对应（GCM 认证会拒绝错误密码或被篡改数据）。
 const VERIFY_TOKEN: &[u8] = b"SECUREPASS_MASTER_PASSWORD_VERIFY_V1";
 

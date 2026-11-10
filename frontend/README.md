@@ -1,8 +1,8 @@
-# SecurePass 前端开发文档
+# Hellopass 前端开发文档
 
 ## 项目概述
 
-SecurePass 是一个简洁、安全的密码管理器前端应用，采用 Vue 3 + 原生 JavaScript 开发，不依赖外部资源，界面简洁明了。
+Hellopass 是一个简洁、安全的密码管理器前端应用，采用 Vue 3 + 原生 JavaScript 开发，不依赖外部资源，界面简洁明了。
 
 ## 技术栈
 

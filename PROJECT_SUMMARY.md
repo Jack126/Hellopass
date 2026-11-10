@@ -1,14 +1,14 @@
-# SecurePass 项目总结
+# Hellopass 项目总结
 
 ## 概述
-SecurePass 是基于 Vue 3 + Rust + Tauri 2 的跨平台桌面密码管理器。密码使用 AES-256-GCM 加密，主密钥由 PBKDF2-HMAC-SHA256（600,000 次）派生。
+Hellopass 是基于 Vue 3 + Rust + Tauri 2 的跨平台桌面密码管理器。密码使用 AES-256-GCM 加密，主密钥由 PBKDF2-HMAC-SHA256（600,000 次）派生。
 
 ## 项目结构
 ```
 passwd/
 ├── src/
-│   ├── main.rs                 # securepass_cli：无头自测入口
-│   ├── main_tauri.rs           # securepass：Tauri 2 GUI 入口
+│   ├── main.rs                 # hellopass_cli：无头自测入口
+│   ├── main_tauri.rs           # hellopass：Tauri 2 GUI 入口
 │   ├── error.rs                # 统一错误类型 AppError
 │   ├── security/
 │   │   ├── crypto.rs           # AES-256-GCM + PBKDF2
@@ -47,7 +47,7 @@ passwd/
 - 启动器：Ctrl+Alt+Space 唤出、Ctrl+Shift+L 立即锁定（均可改键）、拼音首字母+子序列模糊搜索、回车复制并 30 秒清剪贴板
 - 托盘：搜索/锁定/设置/退出；导入导出统一在设置窗
 - 前端：独立设置窗（通用/导入导出/安全/审计/关于），不再打包 Element Plus
-- 工程：AppError 统一错误（运行时边界已采用）；24 个单测/集成/安全测试通过；securepass bin 0 警告
+- 工程：AppError 统一错误（运行时边界已采用）；24 个单测/集成/安全测试通过；hellopass bin 0 警告
 - CI：`.github/workflows/ci.yml` 三平台矩阵（backend tests / frontend build / tauri build）
 
 ## 未完成
@@ -55,6 +55,6 @@ passwd/
 - 跨设备自动同步（当前用加密备份/恢复实现手工同步）
 
 ## 校验方式
-- 后端：`cargo test --bin securepass_cli --no-default-features`
+- 后端：`cargo test --bin hellopass_cli --no-default-features`
 - 前端：`cd frontend && npm run build`
 - 预览：`cd frontend && npm run dev`（index.html 为启动器，setting.html 为设置窗）

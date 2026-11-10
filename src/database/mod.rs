@@ -394,7 +394,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let db_path = dir.join(format!("securepass_migrate_{}.db", stamp));
+        let db_path = dir.join(format!("hellopass_migrate_{}.db", stamp));
         let _ = std::fs::remove_file(&db_path);
 
         // 手工创建一个旧版最小 passwords 表（缺少 priority/tags 等列）

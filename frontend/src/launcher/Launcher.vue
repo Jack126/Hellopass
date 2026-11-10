@@ -65,7 +65,7 @@
     <!-- 解锁 -->
     <form v-else-if="mode === 'unlock'" class="auth" @submit.prevent="doUnlock">
       <div class="auth-icon">🔒</div>
-      <h1>解锁 SecurePass</h1>
+      <h1>解锁 Hellopass</h1>
       <p v-if="error" class="error">{{ error }}</p>
       <input
         ref="authInput"

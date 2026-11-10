@@ -1,5 +1,5 @@
 #!/bin/bash
-# SecurePass 验证脚本
+# Hellopass 验证脚本
 # 无头环境运行核心 Rust 单元测试（不依赖 GUI）
 # 桌面 GUI 验证需在带 webkit2gtk-4.1 / libdbus-1-dev 的环境执行: cargo tauri dev
 
@@ -20,8 +20,8 @@ run() {
   fi
 }
 
-echo "🧪 SecurePass 核心验证（无头）"
-run "核心单元测试" cargo test --bin securepass_cli --no-default-features
+echo "🧪 Hellopass 核心验证（无头）"
+run "核心单元测试" cargo test --bin hellopass_cli --no-default-features
 
 # 前端构建（存在依赖时）
 if [ -d frontend/node_modules ]; then

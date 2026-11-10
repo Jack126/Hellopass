@@ -697,7 +697,7 @@ fn open_settings(app: &AppHandle) {
         "settings",
         tauri::WebviewUrl::App("setting.html".into()),
     )
-    .title("SecurePass 设置")
+    .title("Hellopass 设置")
     .inner_size(720.0, 600.0)
     .min_inner_size(640.0, 520.0)
     .background_color(tauri::window::Color(24, 24, 27, 255))
@@ -786,7 +786,7 @@ fn save_export_file(
         .file_name()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_owned())
-        .unwrap_or_else(|| std::ffi::OsString::from("securepass-export.bin"));
+        .unwrap_or_else(|| std::ffi::OsString::from("hellopass-export.bin"));
 
     let dir = app
         .path()
@@ -898,12 +898,12 @@ fn main() {
             let config_dir = app_dir.join("config");
             std::fs::create_dir_all(&config_dir).ok();
             // 数据库位置：
-            // - 开发构建：固定用仓库根目录的 securepass.db，方便直接用 sqlite3 查看/备份；
+            // - 开发构建：固定用仓库根目录的 hellopass.db，方便直接用 sqlite3 查看/备份；
             // - 发布构建：仍用系统 app data 目录，避免安装目录只读导致无法写入。
             #[cfg(debug_assertions)]
-            let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("securepass.db");
+            let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("hellopass.db");
             #[cfg(not(debug_assertions))]
-            let db_path = app_dir.join("securepass.db");
+            let db_path = app_dir.join("hellopass.db");
 
             let hotkey_path = config_dir.join("hotkey.json");
             let ui_path = config_dir.join("ui.json");
@@ -936,7 +936,7 @@ fn main() {
                 "launcher",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("SecurePass")
+            .title("Hellopass")
             .inner_size(initial_size.width, initial_size.base_height)
             .resizable(false)
             .decorations(false)
@@ -1013,7 +1013,7 @@ fn main() {
                 .expect("创建菜单项失败");
             let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)
                 .expect("创建菜单项失败");
-            let quit = MenuItem::with_id(app, "quit", "退出 SecurePass", true, None::<&str>)
+            let quit = MenuItem::with_id(app, "quit", "退出 Hellopass", true, None::<&str>)
                 .expect("创建菜单项失败");
             let sep1 = PredefinedMenuItem::separator(app).expect("创建分隔符失败");
             let sep2 = PredefinedMenuItem::separator(app).expect("创建分隔符失败");
@@ -1022,7 +1022,7 @@ fn main() {
                 .build()
                 .expect("创建菜单失败");
 
-            let _tray = tauri::tray::TrayIconBuilder::with_id("securepass-tray")
+            let _tray = tauri::tray::TrayIconBuilder::with_id("hellopass-tray")
                 .icon(
                     app.default_window_icon()
                         .expect("缺少默认窗口图标")
@@ -1102,7 +1102,7 @@ fn main() {
             check_hotkey_available
         ])
         .build(tauri::generate_context!())
-        .expect("初始化 SecurePass 失败")
+        .expect("初始化 Hellopass 失败")
         .run(|app, event| {
             // 任何退出路径都先锁定，保证基线是最新的
             if let tauri::RunEvent::ExitRequested { .. } = event {

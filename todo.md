@@ -1,4 +1,4 @@
-# SecurePass 开发 TODO
+# Hellopass 开发 TODO
 
 > 最后同步：2026-11-09。
 > 2026-11-09 起已改为「托盘 + 热键启动器」形态，下面「已完成」里关于主窗口/分类/30 秒自动锁的描述属于历史阶段，仅作参考。
@@ -13,7 +13,7 @@
 - 会话：前端空闲自动锁定 + 手动锁定按钮，设置项落 localStorage 并同步后端超时
 - Tauri 2：VaultRuntime + Mutex；24 个命令；程序化创建窗口 + 托盘；配置文件迁移 v2；图标与 capabilities
 - 前端：主密码设置/解锁；列表/增删改/搜索/分类；导入/导出；安全概览（策略/过期/审计）
-- 工程：无头单测 10 个通过；securepass bin 0 警告
+- 工程：无头单测 10 个通过；hellopass bin 0 警告
 
 ## ⏳ 未完成（按处理顺序）
 
@@ -33,7 +33,7 @@
 ## 历史阶段未完成项
 
 ### 1. 真机与打包（当前无头环境阻塞）
-- [ ] 在带 webkit2gtk-4.1 / libdbus-1-dev 的机器编译 securepass，并 cargo tauri dev 验证窗口/托盘/命令
+- [ ] 在带 webkit2gtk-4.1 / libdbus-1-dev 的机器编译 hellopass，并 cargo tauri dev 验证窗口/托盘/命令
 - [ ] cargo tauri build 跨平台打包（Windows / macOS / Linux）
 
 ### 2. 备份加密 / 恢复 ✅

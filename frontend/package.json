@@ -1,7 +1,7 @@
 {
-  "name": "securepass-frontend",
+  "name": "hellopass-frontend",
   "version": "1.0.0",
-  "description": "SecurePass 密码管理器前端",
+  "description": "Hellopass 密码管理器前端",
   "main": "index.js",
   "scripts": {
     "dev": "vite",
@@ -34,6 +34,6 @@
     "tauri",
     "desktop-app"
   ],
-  "author": "SecurePass Team",
+  "author": "Hellopass Team",
   "license": "BSD-3-Clause"
 }

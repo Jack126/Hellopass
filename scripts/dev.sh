@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 Starting SecurePass Development Environment"
+echo "🚀 Starting Hellopass Development Environment"
 echo "============================================"
 
 # 检查依赖
@@ -50,7 +50,7 @@ echo "  npm run tauri:dev    - Start Tauri development"
 echo "  npm run tauri:build  - Build Tauri application"
 echo ""
 echo "🎯 Quick test commands:"
-echo "  cargo test --bin securepass_cli --no-default-features   - 核心单元测试（无头环境）"
+echo "  cargo test --bin hellopass_cli --no-default-features   - 核心单元测试（无头环境）"
 echo "  cargo tauri dev   - 启动 Tauri 桌面应用（需 webkit2gtk-4.1 / libdbus-1-dev）"
 echo ""
 echo "🌐 Frontend will be available at: http://localhost:3000"

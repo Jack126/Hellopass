@@ -1,6 +1,6 @@
 // 说明：本二进制是无头自测/演示入口；api/database/security 等共享模块主要供
-// securepass 使用。仅编译本二进制时，未被调用的共享项产生 dead_code 警告属预期，
-// 故在此 crate 级关闭该 lint（不影响 securepass 的诊断）。
+// hellopass 使用。仅编译本二进制时，未被调用的共享项产生 dead_code 警告属预期，
+// 故在此 crate 级关闭该 lint（不影响 hellopass 的诊断）。
 #![allow(dead_code)]
 
 mod security;
@@ -17,10 +17,10 @@ use database::Database;
 use rand::Rng;
 
 /// 演示数据：生成 count 条随机记录到一个全新的库（会创建主密码配置）。
-/// 用法：securepass_cli seed-demo <db> <config_dir> <master_password> <count>
+/// 用法：hellopass_cli seed-demo <db> <config_dir> <master_password> <count>
 fn seed_demo(args: &[String]) {
     if args.len() < 6 {
-        eprintln!("用法: securepass_cli seed-demo <db> <config_dir> <master_password> <count>");
+        eprintln!("用法: hellopass_cli seed-demo <db> <config_dir> <master_password> <count>");
         std::process::exit(2);
     }
     let db = PathBuf::from(&args[2]);
@@ -119,7 +119,7 @@ fn main() {
         return;
     }
 
-    println!("SecurePass - 密码管理器");
+    println!("Hellopass - 密码管理器");
     println!("========================");
     
     // 初始化日志
@@ -194,7 +194,7 @@ fn main() {
                 }
             }
             
-            let strong_password = "SecurePass123!@#Test";
+            let strong_password = "Hellopass123!@#Test";
             if master_password_manager.validate_password_strength_inner(strong_password) {
                 println!("✅ 强密码 '{}' 正确通过", strong_password);
             } else {
@@ -231,6 +231,6 @@ fn main() {
     
     println!("\n🎉 所有测试完成！");
     println!("========================");
-    println!("SecurePass 密码管理器核心功能测试完成");
+    println!("Hellopass 密码管理器核心功能测试完成");
     println!("系统已准备好进行下一步开发");
 }

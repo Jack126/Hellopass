@@ -1,4 +1,4 @@
--- SecurePass 数据库结构
+-- Hellopass 数据库结构
 -- 与 src/database/mod.rs::initialize_database 保持一致
 
 CREATE TABLE IF NOT EXISTS passwords (

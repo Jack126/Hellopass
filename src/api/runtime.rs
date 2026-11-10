@@ -1064,8 +1064,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let pid = std::process::id();
         let n = TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let db = dir.join(format!("securepass_test_{}_{}_rt.db", pid, n));
-        let cfg = dir.join(format!("securepass_cfg_{}_{}_rt", pid, n));
+        let db = dir.join(format!("hellopass_test_{}_{}_rt.db", pid, n));
+        let cfg = dir.join(format!("hellopass_cfg_{}_{}_rt", pid, n));
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
         std::fs::create_dir_all(&cfg).unwrap();

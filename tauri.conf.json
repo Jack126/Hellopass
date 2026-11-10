@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SecurePass",
+  "productName": "Hellopass",
   "version": "1.0.0",
-  "identifier": "com.securepass.app",
+  "identifier": "com.hellopass.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -32,6 +32,6 @@
     "copyright": "Copyright © 2025-2026 Jack",
     "category": "Productivity",
     "shortDescription": "A secure password manager",
-    "longDescription": "SecurePass keeps your passwords encrypted and organized."
+    "longDescription": "Hellopass keeps your passwords encrypted and organized."
   }
 }

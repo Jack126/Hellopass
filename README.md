@@ -1,4 +1,4 @@
-# SecurePass 密码管理器
+# Hellopass 密码管理器
 
 跨平台密码管理器，采用 Vue 3 + Rust + Tauri 2 架构；密码使用 AES-256-GCM 加密，主密钥由 PBKDF2-HMAC-SHA256（600,000 次迭代）从主密码派生。
 
@@ -14,8 +14,8 @@
 ```
 passwd/
 ├── src/                          # Rust 后端
-│   ├── main.rs                   # securepass_cli 自测入口（无 GUI 依赖）
-│   ├── main_tauri.rs             # securepass Tauri 2 GUI 入口
+│   ├── main.rs                   # hellopass_cli 自测入口（无 GUI 依赖）
+│   ├── main_tauri.rs             # hellopass Tauri 2 GUI 入口
 │   ├── security/
 │   │   ├── crypto.rs             # AES-256-GCM + PBKDF2
 │   │   ├── master_password.rs    # 主密码设置/验证/salt 持久化
@@ -128,7 +128,7 @@ passwd/
 
 ### 无头核心测试（无需 GUI 依赖）
 ```bash
-cargo test --bin securepass_cli --no-default-features
+cargo test --bin hellopass_cli --no-default-features
 ```
 
 ### 前端构建与单元测试
@@ -155,7 +155,7 @@ cargo tauri build
 
 本项目采用 **BSD 3-Clause License**，见 [LICENSE](LICENSE)。
 
-第三方依赖的许可证（MIT / Apache-2.0 / BSD / MPL-2.0 等）见各依赖仓库；
+第三方组件与许可证全文见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)；
 分发可执行文件时请保留相应版权与许可声明。
 
 ## 📝 文档

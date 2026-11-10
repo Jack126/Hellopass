@@ -1,6 +1,6 @@
-# SecurePass 部署指南
+# Hellopass 部署指南
 
-SecurePass 是基于 Tauri 2 的跨平台**桌面**密码管理器。打包与分发使用 Tauri 官方流程，早期仓库中的多 bin / Docker / Web 部署方式已废弃删除。
+Hellopass 是基于 Tauri 2 的跨平台**桌面**密码管理器。打包与分发使用 Tauri 官方流程，早期仓库中的多 bin / Docker / Web 部署方式已废弃删除。
 
 ## 一、开发运行
 
@@ -14,7 +14,7 @@ cargo tauri dev
 ```
 
 > Linux 需系统依赖：webkit2gtk-4.1、libdbus-1-dev、librsvg、build-essential 等（详见 Tauri 2 官方文档）。
-> 无 GUI 的无头环境可用 `cargo test --bin securepass_cli --no-default-features` 运行核心单元测试。
+> 无 GUI 的无头环境可用 `cargo test --bin hellopass_cli --no-default-features` 运行核心单元测试。
 
 ## 二、构建可分发包
 
@@ -31,7 +31,7 @@ cargo tauri build
 
 | 平台 | 命令 | 结果 |
 |---|---|---|
-| Linux | `cargo tauri build --bundles deb` | ✅ 产出 `SecurePass_1.0.0_amd64.deb`（6.1 MB） |
+| Linux | `cargo tauri build --bundles deb` | ✅ 产出 `Hellopass_1.0.0_amd64.deb`（6.1 MB） |
 | Linux | `cargo tauri build --bundles appimage` | ❌ 需从 GitHub 下载 AppRun，本机 DNS 不可达 |
 | Linux | `cargo tauri build --bundles rpm` | ❌ 需要 `rpmbuild`（未安装） |
 | Windows x64 | `./scripts/package-win.sh` | ✅ 交叉编译产出便携 zip（cargo-xwin + clang-cl/lld-link） |
@@ -48,7 +48,7 @@ cargo tauri build
 ```
 
 - 固定版运行时从微软 WebView2 页面（Fixed Version）下载并解压，目录内应包含 `msedgewebview2.exe`。
-- 内置模式会额外生成 `SecurePass.cmd`，它设置 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向同目录 `webview2/`，
+- 内置模式会额外生成 `Hellopass.cmd`，它设置 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向同目录 `webview2/`，
   双击该 cmd 启动即可完全离线，不依赖系统是否装过 WebView2。
 - 体积参考：exe 约 12 MB；固定版运行时约 150–200 MB，压缩后 zip 约 60–80 MB。
 
@@ -61,12 +61,12 @@ cargo tauri build
 ## 三、数据存放
 
 - 数据库与配置位于各平台的应用数据目录（由 `app.path().app_data_dir()` 解析）。
-- 仓库根目录遗留的 `securepass.db` / `backup.db` 为本地运行产物，建议加入 `.gitignore`，不要提交。
+- 仓库根目录遗留的 `hellopass.db` / `backup.db` 为本地运行产物，建议加入 `.gitignore`，不要提交。
 
 ## 四、已移除的旧部署方式（仅供参考）
 
 以下文件已不再适用并从仓库删除：
-- `scripts/build-{linux,macos,windows,freebsd}.sh`、`scripts/build-all.sh`（针对不存在的 `securepass_complete` CLI）
+- `scripts/build-{linux,macos,windows,freebsd}.sh`、`scripts/build-all.sh`（针对不存在的 `hellopass_complete` CLI）
 - `build/` 目录（AppImage / 便携式打包脚本与旧二进制）
 - `Dockerfile`、`Dockerfile.simple`、`docker-compose.yml`、`nginx.conf`、`monitoring/`（Web 容器化部署）
 - `Cargo_simple.toml`、`Cargo_full.toml`（历史变体清单）

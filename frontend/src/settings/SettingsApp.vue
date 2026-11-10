@@ -1,7 +1,7 @@
 <template>
   <div class="settings">
     <header>
-      <h1>SecurePass 设置</h1>
+      <h1>Hellopass 设置</h1>
       <span v-if="unlocked" class="pill ok">已解锁</span>
       <span v-else class="pill warn">已锁定</span>
     </header>
@@ -202,7 +202,7 @@
       <!-- 关于 -->
       <section v-else class="pane">
         <div class="card">
-          <h2>SecurePass</h2>
+          <h2>Hellopass</h2>
           <p class="muted">版本 1.0.0</p>
         </div>
       </section>
@@ -552,7 +552,7 @@ async function doExport() {
   const saved = await guard(async () => {
     const content = await request<string>('export_encrypted', { exportPassword: exportPw.value, ids: null });
     return request<string>('save_export_file', {
-      filename: `securepass-export-${new Date().toISOString().slice(0, 10)}.spb`,
+      filename: `hellopass-export-${new Date().toISOString().slice(0, 10)}.spb`,
       content,
     });
   });
@@ -566,7 +566,7 @@ async function doBackup() {
   const saved = await guard(async () => {
     const content = await request<string>('export_backup');
     return request<string>('save_export_file', {
-      filename: `securepass-backup-${new Date().toISOString().slice(0, 10)}.spbbackup`,
+      filename: `hellopass-backup-${new Date().toISOString().slice(0, 10)}.spbbackup`,
       content,
     });
   });

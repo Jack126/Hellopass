@@ -1,8 +1,8 @@
 [package]
-name = "securepass"
+name = "hellopass"
 version = "0.1.0"
 edition = "2021"
-default-run = "securepass"
+default-run = "hellopass"
 license = "BSD-3-Clause"
 
 [dependencies]
@@ -21,11 +21,11 @@ hmac = "0.12"
 base64 = "0.21"
 # 敏感内存清零（主密钥、解密后的明文缓冲区）
 zeroize = { version = "1", features = ["derive"] }
-# Tauri 是桌面应用的核心依赖。它仅在构建 securepass 二进制时需要，
+# Tauri 是桌面应用的核心依赖。它仅在构建 hellopass 二进制时需要，
 # 因此放在可选的 tauri-app 特性后并设为默认特性，
 # 这样 `cargo tauri dev` / `cargo build` 开箱即用，无需手动加 --features。
 # 缺少 webkit2gtk/libdbus 的纯 headless 环境可用
-# `cargo test --bin securepass_cli --no-default-features` 跑核心单元测试。
+# `cargo test --bin hellopass_cli --no-default-features` 跑核心单元测试。
 tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
@@ -34,12 +34,12 @@ pinyin = "0.11"
 # GUI 二进制名必须与 package 名一致：Tauri CLI 用 package 名定位主二进制，
 # 名字不一致时 bundler 会把另一个 bin 改名覆盖掉 GUI（之前踩过）。
 [[bin]]
-name = "securepass"
+name = "hellopass"
 path = "src/main_tauri.rs"
 
 # 无头自测/演示入口（不依赖 tauri，可在无 GUI 环境跑测试）
 [[bin]]
-name = "securepass_cli"
+name = "hellopass_cli"
 path = "src/main.rs"
 
 [build-dependencies]
