@@ -112,9 +112,27 @@
 
         <div class="card">
           <h2>导出密码</h2>
-          <p class="muted">导出为加密包，需要单独设置一个导出密码（至少 8 位）。</p>
-          <input v-model="exportPw" type="password" placeholder="导出密码" autocomplete="new-password" />
-          <button :disabled="busy" @click="doExport">导出全部</button>
+          <p class="muted">勾选要导出的条目（默认不选），再设置一个导出密码（至少 8 位）。</p>
+          <input v-model="exportQuery" placeholder="搜索站点 / 用户名 / 标签" />
+          <div class="row">
+            <span class="muted">已选 {{ exportSelected.length }} / {{ exportItems.length }} 条</span>
+            <span class="actions">
+              <button class="ghost" :disabled="busy" @click="selectAllExport">全选</button>
+              <button class="ghost" :disabled="busy" @click="clearExport">清空</button>
+            </span>
+          </div>
+          <div class="pick-list">
+            <label v-for="item in filteredExportItems" :key="item.id" class="pick-row">
+              <input v-model="exportSelected" type="checkbox" :value="item.id" />
+              <span class="pick-name">{{ item.site_name }}</span>
+              <span class="pick-user">{{ item.username }}</span>
+            </label>
+            <p v-if="!filteredExportItems.length" class="muted">没有匹配的条目</p>
+          </div>
+          <input v-model="exportPw" type="password" placeholder="导出密码（至少 8 位）" autocomplete="new-password" />
+          <button :disabled="busy || exportSelected.length === 0" @click="doExport">
+            导出选中的 {{ exportSelected.length }} 条
+          </button>
         </div>
 
         <div class="card">
@@ -435,6 +453,23 @@ const importPath = ref('');
 const importPw = ref('');
 const needImportPw = ref(false);
 const exportPw = ref('');
+interface PickItem {
+  id: number;
+  site_name: string;
+  username: string;
+  tags: string[];
+}
+const exportItems = ref<PickItem[]>([]);
+const exportSelected = ref<number[]>([]);
+const exportQuery = ref('');
+
+const filteredExportItems = computed(() => {
+  const q = exportQuery.value.trim().toLowerCase();
+  if (!q) return exportItems.value;
+  return exportItems.value.filter((i) =>
+    `${i.site_name} ${i.username} ${i.tags.join(' ')}`.toLowerCase().includes(q)
+  );
+});
 
 const restoreFile = ref<HTMLInputElement>();
 const restorePath = ref('');
@@ -545,12 +580,40 @@ async function doImport() {
     importPw.value = '';
     if (importFile.value) importFile.value.value = '';
     importPath.value = '';
+    await loadExportItems();
   }
 }
 
+async function loadExportItems() {
+  const res = await guard(() => request<PickItem[]>('list_entry_summaries'));
+  if (res) {
+    exportItems.value = res;
+    const ids = new Set(res.map((i) => i.id));
+    exportSelected.value = exportSelected.value.filter((id) => ids.has(id));
+  }
+}
+
+function selectAllExport() {
+  const current = new Set(exportSelected.value);
+  for (const item of filteredExportItems.value) current.add(item.id);
+  exportSelected.value = [...current];
+}
+
+function clearExport() {
+  exportSelected.value = [];
+}
+
 async function doExport() {
+  if (!exportSelected.value.length) {
+    error.value = '请先勾选要导出的条目';
+    return;
+  }
+  const ids = [...exportSelected.value];
   const saved = await guard(async () => {
-    const content = await request<string>('export_encrypted', { exportPassword: exportPw.value, ids: null });
+    const content = await request<string>('export_encrypted', {
+      exportPassword: exportPw.value,
+      ids,
+    });
     return request<string>('save_export_file', {
       filename: `hellopass-export-${new Date().toISOString().slice(0, 10)}.spb`,
       content,
@@ -558,7 +621,7 @@ async function doExport() {
   });
   if (saved) {
     exportPw.value = '';
-    setNotice(`已导出到 ${saved}`);
+    setNotice(`已导出 ${ids.length} 条到 ${saved}`);
   }
 }
 
@@ -590,6 +653,7 @@ async function doRestore() {
     restorePw.value = '';
     if (restoreFile.value) restoreFile.value.value = '';
     restorePath.value = '';
+    await loadExportItems();
   }
 }
 
@@ -644,6 +708,7 @@ async function refreshLockState() {
       setNotice('保险库已解锁');
       await loadStats();
       await loadAudit();
+      await loadExportItems();
     } else if (!s) {
       applyLocked();
     }
@@ -659,6 +724,9 @@ function applyLocked() {
   stats.value = null;
   expiring.value = [];
   audit.value = [];
+  exportItems.value = [];
+  exportSelected.value = [];
+  exportQuery.value = '';
   stopRecord(true);
   setNotice('保险库已锁定，操作已禁用', 'bad');
 }
@@ -680,6 +748,7 @@ onMounted(async () => {
   if (unlocked.value) {
     await loadStats();
     await loadAudit();
+    await loadExportItems();
   }
 });
 </script>
