@@ -42,12 +42,11 @@ describe('fuzzy search', () => {
     expect(search(items, '聊天')[0].item.id).toBe(2);
   });
 
-  it('returns recent items for empty query, max 8', () => {
+  it('returns all items for empty query', () => {
     const many = Array.from({ length: 12 }, (_, i) =>
       make({ id: 100 + i, site_name: 'site' + i, last_accessed: `2026-11-0${(i % 9) + 1}T00:00:00Z` })
     );
-    const r = search(many, '   ');
-    expect(r).toHaveLength(8);
+    expect(search(many, '   ')).toHaveLength(12);
   });
 
   it('does not match unrelated query', () => {

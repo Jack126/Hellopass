@@ -79,7 +79,6 @@ export function search(items: Summary[], rawQuery: string): Scored[] {
   if (!q) {
     return [...items]
       .sort((a, b) => recencyScore(b) - recencyScore(a))
-      .slice(0, 8)
       .map((item) => ({ item, score: 0, ranges: [] }));
   }
 
@@ -119,5 +118,5 @@ export function search(items: Summary[], rawQuery: string): Scored[] {
   }
 
   out.sort((a, b) => b.score - a.score || recencyScore(b.item) - recencyScore(a.item));
-  return out.slice(0, 8);
+  return out;
 }

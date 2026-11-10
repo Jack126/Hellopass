@@ -47,9 +47,20 @@
               <option value="large">大</option>
             </select>
           </label>
+          <label class="row">
+            结果条数
+            <select v-model.number="resultLimit" @change="saveResultLimit">
+              <option :value="0">自动（填满窗口）</option>
+              <option :value="5">5 条</option>
+              <option :value="8">8 条</option>
+              <option :value="10">10 条</option>
+              <option :value="15">15 条</option>
+              <option :value="20">20 条</option>
+            </select>
+          </label>
           <p class="muted">
-            自动模式按鼠标所在屏幕逻辑宽度的 35% 计算（限制在 560~900 px），
-            详情/编辑态自动加高；位置跟随鼠标所在显示器。
+            自动模式按窗口高度铺满且不出现滚动条；固定条数超过窗口容量时可以滚动。
+            窗口大小自动按鼠标所在屏幕逻辑宽度的 35% 计算（560~900 px），位置跟随鼠标所在显示器。
           </p>
         </div>
 
@@ -225,6 +236,7 @@ const noticeKind = ref<'ok' | 'bad'>('ok');
 
 const autoLock = ref(0);
 const windowPreset = ref('auto');
+const resultLimit = ref(0);
 const wakeDisplay = ref('Ctrl + Alt + Space');
 const lockDisplay = ref('Ctrl + Shift + L');
 const wakeAccel = ref('control+alt+space');
@@ -461,9 +473,14 @@ function readFile(file: File): Promise<string> {
   });
 }
 
-async function loadWindowPreset() {
-  const preset = await guard(() => request<string>('get_window_preset'));
-  if (preset) windowPreset.value = preset;
+async function loadUiInfo() {
+  const info = await guard(() =>
+    request<{ window_preset: string; result_limit: number }>('get_ui_info')
+  );
+  if (info) {
+    windowPreset.value = info.window_preset;
+    resultLimit.value = info.result_limit;
+  }
 }
 
 async function saveWindowPreset() {
@@ -472,6 +489,14 @@ async function saveWindowPreset() {
     return true;
   });
   if (ok) setNotice('窗口大小已更新');
+}
+
+async function saveResultLimit() {
+  const ok = await guard(async () => {
+    await request('set_result_limit', { limit: resultLimit.value });
+    return true;
+  });
+  if (ok) setNotice('结果条数已更新');
 }
 
 async function saveAutoLock() {
@@ -647,7 +672,7 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   autoLock.value = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
   await loadHotkey();
-  await loadWindowPreset();
+  await loadUiInfo();
   window.addEventListener('focus', refreshLockState);
   unlistenLock = await listen('vault-locked', applyLocked);
   const s = await guard(() => request<boolean>('vault_status'));

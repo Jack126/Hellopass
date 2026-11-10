@@ -18,9 +18,10 @@
         <kbd>Esc</kbd>
       </div>
 
-      <ul class="results">
+      <div ref="resultsWrap" class="results-wrap" :class="{ scrollable: resultLimit > 0 }">
+        <ul class="results">
         <li
-          v-for="(r, i) in results"
+          v-for="(r, i) in shown"
           :key="r.item.id"
           :class="{ active: i === cursor }"
           @mouseenter="cursor = i"
@@ -38,10 +39,11 @@
           <span class="user">{{ r.item.username }}</span>
           <span class="tags">{{ r.item.tags.slice(0, 2).join(' · ') }}</span>
         </li>
-        <li v-if="!results.length" class="empty">
+        <li v-if="!shown.length" class="empty">
           {{ query ? '没有匹配的条目' : '库还是空的，按 Ctrl+N 新建' }}
         </li>
-      </ul>
+        </ul>
+      </div>
 
       <div class="hintbar">
         <span>↑↓ 选择</span><span>↵ 复制密码</span><span>Ctrl+↵ 用户名</span>
@@ -165,10 +167,42 @@ const form = reactive({
   notes: '',
 });
 
+const resultLimit = ref(0); // 0 = 自动填满
+const fitCount = ref(7);
+const resultsWrap = ref<HTMLElement>();
+let listObserver: ResizeObserver | null = null;
+
 const results = computed(() => fuzzySearch(items.value, query.value));
-watch(results, (list) => {
+const effectiveLimit = computed(() =>
+  resultLimit.value > 0 ? resultLimit.value : fitCount.value
+);
+const shown = computed(() => results.value.slice(0, effectiveLimit.value));
+
+watch(shown, (list) => {
   if (cursor.value >= list.length) cursor.value = 0;
 });
+
+// 固定条数出现滚动时，键盘上下移动要把选中项带进视口
+watch(cursor, async () => {
+  await nextTick();
+  const active = resultsWrap.value?.querySelector('li.active');
+  active?.scrollIntoView({ block: 'nearest' });
+});
+
+function measureList() {
+  const el = resultsWrap.value;
+  if (!el) return;
+  const height = el.clientHeight;
+  if (height > 0) fitCount.value = Math.max(1, Math.floor((height - 12) / 42));
+}
+
+function bindListObserver() {
+  if (!resultsWrap.value) return;
+  if (!listObserver) listObserver = new ResizeObserver(() => measureList());
+  listObserver.disconnect();
+  listObserver.observe(resultsWrap.value);
+  measureList();
+}
 const isTall = computed(() => mode.value === 'detail' || mode.value === 'edit');
 
 function firstChar(name: string) {
@@ -211,6 +245,12 @@ async function onShown() {
   error.value = '';
   if (mode.value === 'edit') return;
   try {
+    try {
+      const info = await api.uiInfo();
+      resultLimit.value = info.result_limit;
+    } catch {
+      // 读不到偏好时按自动填满处理
+    }
     if (!(await api.isSet())) {
       mode.value = 'setup';
       await api.suppressHide(true);
@@ -291,13 +331,13 @@ async function doUnlock() {
 }
 
 function move(delta: number) {
-  const n = results.value.length;
+  const n = shown.value.length;
   if (!n) return;
   cursor.value = (cursor.value + delta + n) % n;
 }
 
 async function copy(field: 'password' | 'username') {
-  const entry = detail.value ?? results.value[cursor.value]?.item;
+  const entry = detail.value ?? shown.value[cursor.value]?.item;
   if (!entry) return;
   try {
     await api.copy(entry.id, field);
@@ -327,7 +367,7 @@ function onSearchKey(e: KeyboardEvent) {
     void copy(e.ctrlKey || e.metaKey ? 'username' : 'password');
   } else if (key === 'Tab' || key === 'ArrowRight') {
     e.preventDefault();
-    const entry = results.value[cursor.value]?.item;
+    const entry = shown.value[cursor.value]?.item;
     if (entry) void openDetail(entry);
   } else if (key === 'Escape') {
     e.preventDefault();
@@ -517,6 +557,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKey);
   window.removeEventListener('keyup', onKeyUp);
+  listObserver?.disconnect();
   unlisten.forEach((fn) => fn());
 });
 
@@ -524,6 +565,7 @@ watch(mode, async (m) => {
   if (m === 'search') {
     cursor.value = 0;
     await nextTick();
+    bindListObserver();
     searchInput.value?.focus();
   }
   if (m === 'unlock' || m === 'setup') {

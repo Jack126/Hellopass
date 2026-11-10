@@ -27,33 +27,49 @@ struct LauncherFlags {
     suppress_hide: AtomicBool,
 }
 
-/// 窗口大小偏好（auto / compact / standard / large），落盘到 config/ui.json。
+/// 界面偏好：窗口大小 + 结果条数（0 = 自动填满），落盘到 config/ui.json。
 struct UiPrefs {
     preset: Mutex<String>,
+    result_limit: Mutex<u32>,
     path: std::path::PathBuf,
 }
 
-fn load_ui_preset(path: &std::path::Path) -> String {
+fn load_ui_prefs(path: &std::path::Path) -> (String, u32) {
     let Ok(text) = std::fs::read_to_string(path) else {
-        return "auto".to_string();
+        return ("auto".to_string(), 0);
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return "auto".to_string();
+        return ("auto".to_string(), 0);
     };
-    value
+    let preset = value
         .get("window_preset")
         .and_then(|v| v.as_str())
         .filter(|s| crate::utils::window_size::is_valid_preset(s))
         .unwrap_or("auto")
-        .to_string()
+        .to_string();
+    let limit = value
+        .get("result_limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    (preset, limit)
 }
 
-fn save_ui_preset(path: &std::path::Path, preset: &str) {
-    let body = serde_json::json!({ "window_preset": preset }).to_string();
+fn save_ui_prefs(path: &std::path::Path, preset: &str, result_limit: u32) {
+    let body = serde_json::json!({
+        "window_preset": preset,
+        "result_limit": result_limit,
+    })
+    .to_string();
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, body).is_ok() {
         let _ = std::fs::rename(&tmp, path);
     }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct UiInfo {
+    window_preset: String,
+    result_limit: u32,
 }
 
 fn monitor_under_cursor(app: &AppHandle) -> Option<tauri::Monitor> {
@@ -563,8 +579,11 @@ fn resize_launcher(app: AppHandle, expanded: bool) -> ApiResponse<()> {
 }
 
 #[tauri::command]
-fn get_window_preset(state: State<'_, UiPrefs>) -> ApiResponse<String> {
-    ApiResponse::ok(state.preset.lock().unwrap().clone())
+fn get_ui_info(state: State<'_, UiPrefs>) -> ApiResponse<UiInfo> {
+    ApiResponse::ok(UiInfo {
+        window_preset: state.preset.lock().unwrap().clone(),
+        result_limit: *state.result_limit.lock().unwrap(),
+    })
 }
 
 #[tauri::command]
@@ -577,8 +596,21 @@ fn set_window_preset(
         return ApiResponse::err_message("未知的窗口大小");
     }
     *state.preset.lock().unwrap() = preset.clone();
-    save_ui_preset(&state.path, &preset);
+    let limit = *state.result_limit.lock().unwrap();
+    save_ui_prefs(&state.path, &preset, limit);
     apply_launcher_size(&app, false, false);
+    ApiResponse::ok(())
+}
+
+/// limit=0 表示自动填满窗口；其余限制在 3~30 条。
+#[tauri::command]
+fn set_result_limit(state: State<'_, UiPrefs>, limit: u32) -> ApiResponse<()> {
+    if limit != 0 && !(3..=30).contains(&limit) {
+        return ApiResponse::err_message("结果条数需在 3~30 之间");
+    }
+    *state.result_limit.lock().unwrap() = limit;
+    let preset = state.preset.lock().unwrap().clone();
+    save_ui_prefs(&state.path, &preset, limit);
     ApiResponse::ok(())
 }
 
@@ -875,7 +907,7 @@ fn main() {
 
             let hotkey_path = config_dir.join("hotkey.json");
             let ui_path = config_dir.join("ui.json");
-            let ui_preset = load_ui_preset(&ui_path);
+            let (ui_preset, ui_result_limit) = load_ui_prefs(&ui_path);
             let initial_size = {
                 let h = app.handle().clone();
                 let (mw, mh) = monitor_under_cursor(&h)
@@ -894,6 +926,7 @@ fn main() {
             app.manage(ClipboardGuard::default());
             app.manage(UiPrefs {
                 preset: Mutex::new(ui_preset),
+                result_limit: Mutex::new(ui_result_limit),
                 path: ui_path,
             });
 
@@ -1057,8 +1090,9 @@ fn main() {
             reveal_password,
             get_entry_detail,
             resize_launcher,
-            get_window_preset,
+            get_ui_info,
             set_window_preset,
+            set_result_limit,
             hide_launcher,
             set_suppress_hide,
             get_hotkey,

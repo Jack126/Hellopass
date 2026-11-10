@@ -51,6 +51,7 @@ export const api = {
   remove: (id: number) => request<undefined>('delete_password', { id }),
   hide: () => request<undefined>('hide_launcher'),
   resize: (expanded: boolean) => request<undefined>('resize_launcher', { expanded }),
+  uiInfo: () => request<{ window_preset: string; result_limit: number }>('get_ui_info'),
   suppressHide: (suppress: boolean) => request<undefined>('set_suppress_hide', { suppress }),
   setSessionTimeout: (seconds: number) => request<undefined>('set_session_timeout', { seconds }),
 };
