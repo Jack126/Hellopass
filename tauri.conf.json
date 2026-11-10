@@ -29,7 +29,7 @@
     "resources": [
       "assets/**/*"
     ],
-    "copyright": "Copyright 2024 SecurePass",
+    "copyright": "Copyright © 2025-2026 Jack",
     "category": "Productivity",
     "shortDescription": "A secure password manager",
     "longDescription": "SecurePass keeps your passwords encrypted and organized."

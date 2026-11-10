@@ -151,6 +151,13 @@ cargo tauri dev
 cargo tauri build
 ```
 
+## 许可证
+
+本项目采用 **BSD 3-Clause License**，见 [LICENSE](LICENSE)。
+
+第三方依赖的许可证（MIT / Apache-2.0 / BSD / MPL-2.0 等）见各依赖仓库；
+分发可执行文件时请保留相应版权与许可声明。
+
 ## 📝 文档
 - [安全架构设计](security-architecture.md)
 - [部署指南](DEPLOYMENT.md)

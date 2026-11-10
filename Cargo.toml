@@ -3,6 +3,7 @@ name = "securepass"
 version = "0.1.0"
 edition = "2021"
 default-run = "securepass"
+license = "BSD-3-Clause"
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
