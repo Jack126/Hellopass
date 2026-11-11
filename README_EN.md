@@ -4,6 +4,12 @@ Hellopass is a cross-platform password manager built with Vue 3 + Rust + Tauri 2
 All passwords are encrypted with **AES-256-GCM**, and the master key is derived
 from your master password using **PBKDF2-HMAC-SHA256 (600,000 iterations)**.
 
+> [!IMPORTANT]
+> - 🤖 **AI-Generated Project**: All code in this project was generated with AI
+>   assistance, for learning, reference, and secondary development only.
+> - 💾 **Local-Only Storage**: All data is encrypted with AES-256-GCM and stored
+>   **only on your local device** — nothing is uploaded to any server.
+
 ---
 
 ## 1. Quick Start (Windows portable build)
