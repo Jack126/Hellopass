@@ -24,3 +24,4 @@ test-results-*.log
 # OS / editor
 .DS_Store
 *.swp
+docs/
