@@ -73,25 +73,9 @@ Open it from the tray menu. It includes:
 ![New entry](screenshots/2026-11-10_10-35-10.jpg)
 ![Settings](screenshots/2026-11-10_10-35-43.jpg)
 
-## 4. Where your data lives
-
-```
-%APPDATA%\com.hellopass.app\
-├── hellopass.db                              # encrypted vault
-└── config\
-    ├── master_password_config.json           # salt + verification token
-    └── hotkey.json                           # hotkey bindings
-```
-
-The database file is stored with `0600` permissions. Site names, URLs, and
-usernames are stored in plaintext; **passwords and notes are encrypted**.
-
-> Deleting `Hellopass.exe` does **not** delete your data. To fully wipe, remove
-> the `%APPDATA%\com.hellopass.app` folder.
-
 ---
 
-## 5. Security at a glance
+## 4. Security at a glance
 
 - **Encryption:** AES-256-GCM (authenticated, tamper-resistant)
 - **Key derivation:** PBKDF2-HMAC-SHA256, 600,000 iterations, 256-bit key
@@ -106,39 +90,7 @@ encrypted `.spb` backup regularly.
 
 ---
 
-## 6. Build from source (developers)
-
-### Requirements
-
-- Rust 1.70+
-- Node.js 18+
-- Tauri 2 CLI
-- Linux: `webkit2gtk-4.1` and `libdbus-1-dev`
-
-### Run in development
-
-```bash
-npm install --prefix frontend
-cargo install tauri-cli --version ^2.0.0
-cargo tauri dev
-```
-
-### Headless core tests (no GUI)
-
-```bash
-cargo test --bin hellopass_cli --no-default-features
-```
-
-### Package the Windows portable build (from Linux/WSL)
-
-```bash
-./scripts/package-win.sh                 # depends on system WebView2
-./scripts/package-win.sh --with-webview2 # bundles an offline WebView2 runtime
-```
-
----
-
-## 7. Planned (not yet implemented)
+## 5. Planned (not yet implemented)
 
 - **Fixed-format Excel (.xlsx) / CSV import (later)**
   - Import password entries from a **fixed template** for Excel and CSV
@@ -151,11 +103,13 @@ cargo test --bin hellopass_cli --no-default-features
   - Plaintext Excel/CSV is an import-only convenience channel — **no bulk
     plaintext export** (keeps the current security policy).
 
-## 8. License
+---
+
+## License
 
 This project is licensed under the **BSD 3-Clause License** — see
 [LICENSE](LICENSE). Third-party licenses are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ---
-Last updated: 2026-11-10
+Last updated: 2026-11-12
