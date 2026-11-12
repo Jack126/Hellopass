@@ -31,7 +31,8 @@ cargo tauri build
 
 | 平台 | 命令 | 结果 |
 |---|---|---|
-| Linux | `cargo tauri build --bundles deb` | ✅ 产出 `Hellopass_1.0.0_amd64.deb`（6.1 MB） |
+| Linux | `./scripts/package-linux.sh` | ✅ 便携 tar.gz（含桌面项与图标） |
+| Linux | `./scripts/package-linux.sh --deb` | ✅ 便携 tar.gz + `.deb`（约 5.6 MB） |
 | Linux | `cargo tauri build --bundles appimage` | ❌ 需从 GitHub 下载 AppRun，本机 DNS 不可达 |
 | Linux | `cargo tauri build --bundles rpm` | ❌ 需要 `rpmbuild`（未安装） |
 | Windows x64 | `./scripts/package-win.sh` | ✅ 交叉编译产出便携 zip（cargo-xwin + clang-cl/lld-link） |
@@ -52,7 +53,21 @@ cargo tauri build
   双击该 cmd 启动即可完全离线，不依赖系统是否装过 WebView2。
 - 体积参考：exe 约 12 MB；固定版运行时约 150–200 MB，压缩后 zip 约 60–80 MB。
 
-### 2.4 macOS / FreeBSD
+### 2.4 Linux 打包
+
+```bash
+./scripts/package-linux.sh            # 便携版 tar.gz（当前主机架构）
+./scripts/package-linux.sh --deb      # 便携版 + .deb（走 tauri bundler，需要 dpkg-deb）
+```
+
+- 产物在 `dist-linux/`：`Hellopass-<版本>-linux-<架构>.tar.gz`（内含二进制、`Hellopass.desktop`、
+  图标、README、LICENSE 与第三方许可证），以及可选的 `Hellopass_<版本>_<架构>.deb`；
+  每个包都附同名 `.sha256` 校验文件。
+- 便携版解压后执行 `./hellopass` 即可；包内 README 给出加入当前用户应用菜单的命令。
+- 只打当前主机架构（x86_64 / aarch64），不做交叉编译。
+- AppImage 需要 linuxdeploy 在构建时联网下载，本机网络不可达，因此脚本未包含。
+
+### 2.5 macOS / FreeBSD
 
 - **macOS**：必须在 macOS 主机上构建。`cargo tauri build` 产出 `.app` / `.dmg`；分发需要开发者证书做签名与公证。
 - **FreeBSD**：Tauri 2 的 `wry`/`tao` 仅支持 linux/windows/macos/android/ios，源码里按 `target_os = "linux"` 分支处理，

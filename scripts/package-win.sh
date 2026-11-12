@@ -10,6 +10,7 @@
 # 目录里必须包含 msedgewebview2.exe（微软官网 WebView2 → Fixed Version 下载后解压）。
 # 打包后会额外生成 Hellopass.cmd，它设置 WEBVIEW2_BROWSER_EXECUTABLE_FOLDER
 # 再启动程序，从而完全离线、不依赖系统安装的 WebView2 Runtime。
+# 打包后会额外生成 <zip名>.sha256 校验文件（sha256sum 格式，供用户核对下载完整性）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,7 +30,7 @@ while [ $# -gt 0 ]; do
       fi
       ;;
     -h|--help)
-      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -79,6 +80,13 @@ EOF
   sed -i 's/$/\r/' "$OUT/Hellopass.cmd"
 fi
 
+# 产物命名规则（两种分支保持一致），README 与打包收尾都引用它
+if [ "$WITH_WEBVIEW2" = 1 ]; then
+  ZIP="Hellopass-$VERSION-win64-webview2.zip"
+else
+  ZIP="Hellopass-$VERSION-win64.zip"
+fi
+
 cat > "$OUT/README.txt" <<EOF
 Hellopass $VERSION  (Windows x64 便携版)
 ========================================
@@ -98,7 +106,7 @@ cat >> "$OUT/README.txt" <<'EOF'
 运行需要系统已安装 WebView2 Runtime（Win11 及较新 Win10 已内置）。
 EOF
 fi
-cat >> "$OUT/README.txt" <<'EOF'
+cat >> "$OUT/README.txt" <<EOF
 
 1. 按 Ctrl+Alt+Space 唤出搜索窗，Ctrl+Shift+L 立即锁定（都可在托盘「设置…」里改键）
    输入即搜，↑↓ 选择，Enter 复制密码，Ctrl+Enter 复制用户名，
@@ -119,6 +127,15 @@ cat >> "$OUT/README.txt" <<'EOF'
 【系统要求】
 - Windows 10 1809 及以上 / Windows 11
 
+【校验压缩包】
+随包提供 $ZIP.sha256，内容为「SHA256 值 + 两个空格 + 文件名」，
+与 $ZIP 放在同一目录即可验证下载是否完整、未被篡改：
+- PowerShell（在压缩包所在目录）：
+    Get-FileHash .\\$ZIP -Algorithm SHA256
+- CMD（在压缩包所在目录）：
+    certutil -hashfile $ZIP SHA256
+把输出值与 $ZIP.sha256 中记录的哈希逐位比对，一致即通过。
+
 【注意事项】
 - 程序未做代码签名，首次运行 SmartScreen 可能提示"未知发布者"，
   点"更多信息 → 仍要运行"即可。
@@ -128,13 +145,35 @@ cat >> "$OUT/README.txt" <<'EOF'
 EOF
 
 cd "$OUT"
-if [ "$WITH_WEBVIEW2" = 1 ]; then
-  ZIP="Hellopass-$VERSION-win64-webview2.zip"
-else
-  ZIP="Hellopass-$VERSION-win64.zip"
-fi
-rm -f ./*.zip
+rm -f ./*.zip ./*.zip.sha256
 zip -q -r "$ZIP" .
+
+# 先生成 zip，再计算校验值：.sha256 绝不能被打进 zip 内部
+if command -v sha256sum >/dev/null 2>&1; then
+  HASH=$(sha256sum "$ZIP" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  HASH=$(shasum -a 256 "$ZIP" | awk '{print $1}')
+elif command -v openssl >/dev/null 2>&1; then
+  HASH=$(openssl dgst -sha256 "$ZIP" | awk '{print $NF}')
+else
+  echo "错误: 未找到可用的 SHA256 工具，请安装 coreutils(sha256sum)、perl(shasum) 或 openssl 后重试。" >&2
+  exit 1
+fi
+# 防御性校验：必须是 64 位小写十六进制，避免写入半截/错误内容
+case "$HASH" in
+  *[!0-9a-f]*|"") echo "错误: SHA256 计算结果异常（'$HASH'），已中止。" >&2; exit 1 ;;
+esac
+if [ "${#HASH}" -ne 64 ]; then
+  echo "错误: SHA256 长度异常（${#HASH} != 64），已中止。" >&2
+  exit 1
+fi
+# 单行、相对当前目录的纯文件名，两个空格分隔，sha256sum -c 兼容
+printf '%s  %s\n' "$HASH" "$ZIP" > "$ZIP.sha256"
+
 echo
 echo "==> 产物: $(pwd)"
 ls -lh
+echo
+echo "==> SHA256 校验文件: $ZIP.sha256"
+echo "$HASH  $ZIP"
+echo "（上面这行可直接粘贴到 GitHub Release Notes）"

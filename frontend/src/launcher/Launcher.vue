@@ -57,7 +57,14 @@
       <h1>设置主密码</h1>
       <p class="muted">至少 12 位，包含大小写字母、数字和特殊字符</p>
       <p v-if="error" class="error">{{ error }}</p>
-      <input v-model="password" type="password" placeholder="主密码" autocomplete="new-password" @keydown.esc.prevent="hide" />
+      <input
+        ref="setupInput"
+        v-model="password"
+        type="password"
+        placeholder="主密码"
+        autocomplete="new-password"
+        @keydown.esc.prevent="hide"
+      />
       <input v-model="password2" type="password" placeholder="再输一次" autocomplete="new-password" @keydown.esc.prevent="hide" />
       <button type="submit" :disabled="busy">创建保险库</button>
     </form>
@@ -103,6 +110,12 @@
         <dt>备注</dt>
         <dd class="notes">{{ detail.notes || '—' }}</dd>
       </dl>
+      <div class="detail-actions">
+        <button type="button" class="ghost" @click="startEdit">编辑</button>
+        <button type="button" class="danger" :disabled="busy" @click="removeEntry">
+          {{ confirmDelete ? '确认删除' : '删除' }}
+        </button>
+      </div>
       <div class="hintbar">
         <span>按住 Alt 看密码</span><span>E 编辑</span><span>Del 两次删除</span><span>Esc 返回</span>
       </div>
@@ -157,6 +170,7 @@ const confirmDelete = ref(false);
 
 const searchInput = ref<HTMLInputElement>();
 const authInput = ref<HTMLInputElement>();
+const setupInput = ref<HTMLInputElement>();
 
 const form = reactive({
   site_name: '',
@@ -233,6 +247,7 @@ async function refresh() {
 
 async function goSearch() {
   mode.value = 'search';
+  confirmDelete.value = false;
   query.value = '';
   cursor.value = 0;
   await api.suppressHide(false);
@@ -243,7 +258,15 @@ async function goSearch() {
 
 async function onShown() {
   error.value = '';
-  if (mode.value === 'edit') return;
+  if (mode.value === 'edit') {
+    // 保持编辑态，但列表数据要同步（设置窗可能已增删条目）
+    try {
+      await refresh();
+    } catch {
+      // 编辑中刷新失败不影响当前表单
+    }
+    return;
+  }
   try {
     try {
       const info = await api.uiInfo();
@@ -255,6 +278,7 @@ async function onShown() {
       mode.value = 'setup';
       await api.suppressHide(true);
       await nextTick();
+      setupInput.value?.focus();
       return;
     }
     if (!(await api.status())) {
@@ -292,6 +316,25 @@ async function ensureLockState() {
   await api.suppressHide(true);
   await nextTick();
   authInput.value?.focus();
+}
+
+/// 同步条目列表：设置窗里清空/导入后，启动器需要重新拉一次，避免显示已删除的旧条目。
+async function syncEntries() {
+  await ensureLockState();
+  if (mode.value !== 'search' && mode.value !== 'detail') return;
+  try {
+    await refresh();
+  } catch {
+    return;
+  }
+  // 当前详情的条目已被删除时退回搜索列表
+  if (
+    mode.value === 'detail' &&
+    detail.value &&
+    !items.value.some((i) => i.id === detail.value!.id)
+  ) {
+    await goSearch();
+  }
 }
 
 async function doSetup() {
@@ -420,8 +463,13 @@ async function startEdit() {
 }
 
 function cancelEdit() {
-  if (editingId.value && detail.value) mode.value = 'detail';
-  else void goSearch();
+  if (editingId.value && detail.value) {
+    mode.value = 'detail';
+    // 退出编辑后恢复失焦自动收起，否则窗口会一直留在屏幕上
+    void api.suppressHide(false);
+  } else {
+    void goSearch();
+  }
 }
 
 async function save() {
@@ -479,7 +527,7 @@ async function removeEntry() {
   if (!detail.value) return;
   if (!confirmDelete.value) {
     confirmDelete.value = true;
-    error.value = '再按一次 Delete 确认删除';
+    error.value = '再点一次「删除」或按 Delete 确认，删除后不可恢复';
     return;
   }
   try {
@@ -519,6 +567,23 @@ function onGlobalKey(e: KeyboardEvent) {
   }
 }
 
+/// 窗口级 Esc 兜底：设置主密码/解锁/编辑/搜索框失去焦点时，也能用 Esc 收起启动器。
+/// 输入框或详情页已经处理过的 Esc 会带 defaultPrevented，这里直接跳过。
+function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape' || e.defaultPrevented || composing.value) return;
+  if (mode.value === 'setup' || mode.value === 'unlock') {
+    e.preventDefault();
+    void hide();
+  } else if (mode.value === 'edit') {
+    e.preventDefault();
+    cancelEdit();
+  } else if (mode.value === 'search') {
+    e.preventDefault();
+    if (query.value) query.value = '';
+    else void hide();
+  }
+}
+
 function onKeyUp(e: KeyboardEvent) {
   if (e.key === 'Alt') revealed.value = null;
 }
@@ -530,12 +595,18 @@ onMounted(async () => {
   const minutes = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
   await api.setSessionTimeout(minutes * 60).catch(() => {});
   window.addEventListener('keydown', onGlobalKey);
+  window.addEventListener('keydown', onWindowKeydown);
   window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('focus', () => void ensureLockState());
+  window.addEventListener('focus', () => void syncEntries());
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) void ensureLockState();
+    if (!document.hidden) void syncEntries();
   });
   unlisten.push(await listen('launcher-shown', () => void onShown()));
+  unlisten.push(
+    await listen('entries-changed', () => {
+      if (!document.hidden) void syncEntries();
+    })
+  );
   unlisten.push(
     await listen('launcher-hidden', () => {
       revealed.value = null;
@@ -556,6 +627,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKey);
+  window.removeEventListener('keydown', onWindowKeydown);
   window.removeEventListener('keyup', onKeyUp);
   listObserver?.disconnect();
   unlisten.forEach((fn) => fn());
@@ -568,7 +640,11 @@ watch(mode, async (m) => {
     bindListObserver();
     searchInput.value?.focus();
   }
-  if (m === 'unlock' || m === 'setup') {
+  if (m === 'setup') {
+    await nextTick();
+    setupInput.value?.focus();
+  }
+  if (m === 'unlock') {
     await nextTick();
     authInput.value?.focus();
   }

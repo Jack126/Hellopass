@@ -12,8 +12,8 @@
       </button>
     </nav>
 
-    <p v-if="error" class="banner bad">{{ error }}</p>
-    <p v-else-if="notice" class="banner" :class="noticeKind">{{ notice }}</p>
+    <p v-if="error && errorTab === tab" class="banner bad">{{ error }}</p>
+    <p v-else-if="notice && noticeTab === tab" class="banner" :class="noticeKind">{{ notice }}</p>
     <p v-if="!unlocked" class="banner">
       保险库已锁定，请按 Ctrl+Alt+Space 唤出搜索窗解锁后再操作。
     </p>
@@ -104,7 +104,14 @@
       <section v-else-if="tab === 'transfer'" class="pane">
         <div class="card">
           <h2>导入密码</h2>
-          <p class="muted">支持加密导出包（.spb）以及 JSON / CSV 明文。</p>
+          <p class="muted">
+            支持加密导出包（.spb）以及 JSON / CSV 明文。CSV 是按文件格式识别的，不需要额外的列；
+            读取表头 name / url / username / password / note（也兼容本程序的 site_name / site_url / notes）。
+            单个文件不超过 5 MB，单次最多导入 5000 条。
+          </p>
+          <p class="muted">
+            已存在的条目会被导入内容覆盖，用新密码替换旧密码（按名称 + 网址 + 用户名识别，同一站点可以保留多个账号）。
+          </p>
           <input ref="importFile" type="file" accept=".spb,.json,.csv" @change="onImportFile" />
           <input v-if="needImportPw" v-model="importPw" type="password" placeholder="导出包密码" />
           <button :disabled="busy || !importPath" @click="doImport">导入</button>
@@ -170,6 +177,17 @@
           <button class="ghost" :disabled="busy" @click="loadStats">刷新</button>
         </div>
 
+        <div class="card danger-card">
+          <h2>清空所有记录</h2>
+          <p class="muted">
+            删除库中全部 {{ stats?.total_count ?? 0 }} 条密码记录及其历史密码，操作不可恢复，建议先导出备份。
+            审计日志会保留。
+          </p>
+          <button class="danger" :disabled="busy" @click="clearAll">
+            {{ clearArmed ? '再次点击确认清空' : '清空所有记录' }}
+          </button>
+        </div>
+
         <div class="card">
           <h2>即将过期（90 天）</h2>
           <ul class="list">
@@ -221,7 +239,7 @@
       <section v-else class="pane">
         <div class="card">
           <h2>Hellopass</h2>
-          <p class="muted">版本 1.0.0</p>
+          <p class="muted">版本 1.0.1</p>
         </div>
       </section>
     </main>
@@ -249,7 +267,9 @@ const tab = ref('general');
 const unlocked = ref(false);
 const busy = ref(false);
 const error = ref('');
+const errorTab = ref('general');
 const notice = ref('');
+const noticeTab = ref('general');
 const noticeKind = ref<'ok' | 'bad'>('ok');
 
 const autoLock = ref(0);
@@ -388,7 +408,7 @@ function onRecordKey(e: KeyboardEvent) {
   if (!token) return; // 只按了修饰键
   const isFKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(token);
   if (!mods.length && !isFKey) {
-    error.value = '至少带一个修饰键（F1~F24 除外）';
+    setError('至少带一个修饰键（F1~F24 除外）');
     return;
   }
   capturedAccel.value = [...mods, token].join('+');
@@ -422,7 +442,7 @@ async function saveHotkey() {
       { kind, accelerator: capturedAccel.value }
     );
     if (!check.available) {
-      error.value = check.reason || '该组合不可用，请换一个';
+      setError(check.reason || '该组合不可用，请换一个');
       return;
     }
     const info = await request<HotkeyInfo>('set_hotkey', {
@@ -433,7 +453,7 @@ async function saveHotkey() {
     stopRecord(false);
     setNotice(kind === 'lock' ? '锁定热键已更新' : '唤醒热键已更新');
   } catch (e) {
-    error.value = (e as Error).message;
+    setError((e as Error).message);
     stopRecord(true);
   } finally {
     savingHotkey.value = false;
@@ -481,9 +501,16 @@ const expiring = ref<Expiry[]>([]);
 const audit = ref<AuditLog[]>([]);
 const auditDays = ref(30);
 
+/// 消息只在触发它的 tab 里显示，切到别的 tab 不再跟着出现。
 function setNotice(text: string, kind: 'ok' | 'bad' = 'ok') {
   notice.value = text;
+  noticeTab.value = tab.value;
   noticeKind.value = kind;
+}
+
+function setError(text: string) {
+  error.value = text;
+  errorTab.value = tab.value;
 }
 
 async function guard<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -492,14 +519,19 @@ async function guard<T>(fn: () => Promise<T>): Promise<T | undefined> {
   try {
     return await fn();
   } catch (e) {
-    error.value = (e as Error).message;
+    setError((e as Error).message);
     return undefined;
   } finally {
     busy.value = false;
   }
 }
 
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+
 function readFile(file: File): Promise<string> {
+  if (file.size > MAX_IMPORT_BYTES) {
+    return Promise.reject(new Error('文件超过 5 MB 上限'));
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ''));
@@ -549,7 +581,7 @@ async function lockNow() {
 
 async function changeMaster() {
   if (newPw.value !== newPw2.value) {
-    error.value = '两次输入的新密码不一致';
+    setError('两次输入的新密码不一致');
     return;
   }
   const ok = await guard(() => request('change_master_password', { oldPassword: oldPw.value, newPassword: newPw.value }));
@@ -576,7 +608,11 @@ async function doImport() {
     return res;
   });
   if (done) {
-    setNotice(`导入 ${done.imported_count} 条，跳过 ${done.skipped_count} 条重复`);
+    setNotice(
+      `新增 ${done.imported_count} 条，覆盖 ${done.updated_count} 条` +
+        (done.skipped_count ? `，跳过 ${done.skipped_count} 条` : '') +
+        (done.error_count ? `，失败 ${done.error_count} 条` : '')
+    );
     importPw.value = '';
     if (importFile.value) importFile.value.value = '';
     importPath.value = '';
@@ -605,7 +641,7 @@ function clearExport() {
 
 async function doExport() {
   if (!exportSelected.value.length) {
-    error.value = '请先勾选要导出的条目';
+    setError('请先勾选要导出的条目');
     return;
   }
   const ids = [...exportSelected.value];
@@ -683,6 +719,35 @@ async function purgeAudit() {
   }
 }
 
+const clearArmed = ref(false);
+let clearTimer: number | null = null;
+
+/// 一键清空需两次点击，5 秒内没有第二次点击就自动解除，避免误删。
+async function clearAll() {
+  if (!clearArmed.value) {
+    clearArmed.value = true;
+    if (clearTimer) window.clearTimeout(clearTimer);
+    clearTimer = window.setTimeout(() => {
+      clearArmed.value = false;
+      clearTimer = null;
+    }, 5000);
+    setNotice('再次点击「清空所有记录」将删除全部条目，不可恢复', 'bad');
+    return;
+  }
+  clearArmed.value = false;
+  if (clearTimer) {
+    window.clearTimeout(clearTimer);
+    clearTimer = null;
+  }
+  const removed = await guard(() => request<number>('clear_all_passwords'));
+  if (removed !== undefined) {
+    setNotice(`已清空 ${removed} 条记录`);
+    await loadStats();
+    await loadAudit();
+    await loadExportItems();
+  }
+}
+
 async function loadStats() {
   const [s, e] = await guard(async () => {
     const s = await request<Stats>('get_password_stats');
@@ -720,6 +785,7 @@ async function refreshLockState() {
 function applyLocked() {
   if (!unlocked.value) return;
   unlocked.value = false;
+  clearArmed.value = false;
   integrity.value = null;
   stats.value = null;
   expiring.value = [];
@@ -732,6 +798,7 @@ function applyLocked() {
 }
 
 onBeforeUnmount(() => {
+  if (clearTimer) window.clearTimeout(clearTimer);
   if (recordingKind.value) void request('end_hotkey_capture');
   unlistenLock?.();
   window.removeEventListener('focus', refreshLockState);

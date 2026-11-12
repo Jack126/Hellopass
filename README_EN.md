@@ -4,6 +4,8 @@ Hellopass is a cross-platform password manager built with Vue 3 + Rust + Tauri 2
 All passwords are encrypted with **AES-256-GCM**, and the master key is derived
 from your master password using **PBKDF2-HMAC-SHA256 (600,000 iterations)**.
 
+Current version: **v1.0.1**
+
 > [!IMPORTANT]
 > - 🤖 **AI-Generated Project**: All code in this project was generated with AI
 >   assistance, for learning, reference, and secondary development only.
@@ -90,18 +92,24 @@ encrypted `.spb` backup regularly.
 
 ---
 
-## 5. Planned (not yet implemented)
+## 5. Completed
 
-- **Fixed-format Excel (.xlsx) / CSV import (later)**
-  - Import password entries from a **fixed template** for Excel and CSV
-    (columns such as: site name / URL / username / password / notes; column
-    names and order to be spec'd up front).
-  - CSV parsed with UTF-8 (BOM); Excel parsed into the same internal row
-    structure.
-  - Reuses the existing "site name + username" deduplication and returns
-    added / skipped counts.
-  - Plaintext Excel/CSV is an import-only convenience channel — **no bulk
-    plaintext export** (keeps the current security policy).
+- **CSV import**: supports this app's export format and browser exports using
+  `name, url, username, password, note` headers (case-insensitive, BOM / CRLF /
+  quoted newlines accepted). Entries are matched by **name + URL + username**,
+  so a site can keep multiple accounts; existing entries are overwritten with
+  the new password.
+
+## 6. Planned (not yet implemented)
+
+- **Fixed-format Excel (.xlsx) import (later)**
+  - Import password entries from a **fixed template** (columns such as: site
+    name / URL / username / password / notes; column names and order to be
+    spec'd up front).
+  - Reuses the existing "name + URL + username" matching: existing entries are
+    overwritten, and added / updated / skipped counts are returned.
+  - Plaintext Excel is an import-only convenience channel — **no bulk plaintext
+    export** (keeps the current security policy).
 
 ---
 

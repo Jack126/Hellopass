@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use chrono::{Duration, DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use base64::Engine;
@@ -28,6 +28,10 @@ fn to_response<T>(result: AppResult<T>) -> ApiResponse<T> {
 const AUDIT_RETENTION_DAYS: i64 = 30;
 /// 审计日志最大条数，超出后删最旧的。
 const AUDIT_MAX_ROWS: i64 = 1000;
+/// 导入文件大小上限（字节）：明文 JSON/CSV 与加密备份包都适用。
+const MAX_IMPORT_BYTES: usize = 5 * 1024 * 1024;
+/// 单次导入的条目数上限。
+const MAX_IMPORT_ENTRIES: usize = 5000;
 
 /// 失败计数与锁定截止时间：需要落盘，否则重启应用就能重置 5 次失败锁定。
 #[derive(Serialize, Deserialize, Default)]
@@ -635,6 +639,32 @@ impl VaultRuntime {
         result
     }
 
+    /// 清空所有密码条目（含历史密码），返回删除条数。
+    /// 审计日志保留，并记录本次清空操作。
+    pub fn clear_all_passwords(&mut self) -> ApiResponse<usize> {
+        if !self.enforce_session() {
+            return locked();
+        }
+        let result = self.with_vault(|v| v.delete_all_passwords());
+        if result.success {
+            self.refresh_session();
+            if let Some(n) = result.data {
+                let details = format!("清空 {} 条密码", n);
+                self.vault.as_ref().map(|v| {
+                    v.add_audit_log(
+                        "clear_all_passwords",
+                        Some("password"),
+                        None,
+                        Some(&details),
+                        true,
+                        None,
+                    )
+                });
+            }
+        }
+        result
+    }
+
     pub fn get_password_stats(&mut self) -> ApiResponse<PasswordStats> {
         if !self.enforce_session() {
             return locked();
@@ -796,6 +826,12 @@ impl VaultRuntime {
     }
 
     fn try_import_encrypted(&mut self, data: String, export_password: String) -> AppResult<ImportResult> {
+        if data.len() > MAX_IMPORT_BYTES {
+            return Err(AppError::Message(format!(
+                "导入文件过大：上限 {} MB",
+                MAX_IMPORT_BYTES / 1024 / 1024
+            )));
+        }
         let pkg: EncryptedExportPackage = serde_json::from_str(&data)
             .map_err(|e| AppError::Message(format!("备份格式错误: {}", e)))?;
         if pkg.version != "2.0" {
@@ -840,6 +876,12 @@ impl VaultRuntime {
     }
 
     fn try_restore_backup(&mut self, data: String, master_password: String) -> AppResult<ImportResult> {
+        if data.len() > MAX_IMPORT_BYTES {
+            return Err(AppError::Message(format!(
+                "备份文件过大：上限 {} MB",
+                MAX_IMPORT_BYTES / 1024 / 1024
+            )));
+        }
         let pkg: BackupPackage = serde_json::from_str(&data)
             .map_err(|e| AppError::Message(format!("备份格式错误: {}", e)))?;
         if pkg.version != "1.0" {
@@ -902,18 +944,20 @@ struct ImportEntry {
     tags: Option<String>,
 }
 
-/// 按 CSV 规则切分一行（支持双引号包裹与内部双引号转义）。
-fn split_csv_line(line: &str) -> Vec<String> {
-    let mut fields: Vec<String> = Vec::new();
-    let mut cur = String::new();
+/// 按 CSV 规则切分整个文档：支持引号包裹的逗号、换行与 "" 转义。
+/// 浏览器导出的备注里可能带换行，不能按行切分。
+fn split_csv_records(data: &str) -> Vec<Vec<String>> {
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut record: Vec<String> = Vec::new();
+    let mut field = String::new();
     let mut in_quotes = false;
-    let mut chars = line.chars().peekable();
+    let mut chars = data.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '"' => {
                 if in_quotes {
                     if chars.peek() == Some(&'"') {
-                        cur.push('"');
+                        field.push('"');
                         chars.next();
                     } else {
                         in_quotes = false;
@@ -922,50 +966,79 @@ fn split_csv_line(line: &str) -> Vec<String> {
                     in_quotes = true;
                 }
             }
-            ',' if !in_quotes => {
-                fields.push(std::mem::take(&mut cur));
+            ',' if !in_quotes => record.push(std::mem::take(&mut field)),
+            '\r' if !in_quotes => {
+                // CRLF：吃掉 \n，并按换行结束当前记录
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
             }
-            _ => cur.push(c),
+            '\n' if !in_quotes => {
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
+            }
+            _ => field.push(c),
         }
     }
-    fields.push(cur);
-    fields
+    if !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+    records
 }
 
-/// 解析 CSV 导入数据（首行为表头，需包含 site_name/username/password）。
+/// 在表头中查找列下标（忽略大小写），支持多个别名。
+fn find_column(headers: &[String], names: &[&str]) -> Option<usize> {
+    headers
+        .iter()
+        .position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)))
+}
+
+/// 解析 CSV 导入数据（首行为表头）。
+/// 兼容本程序导出（site_name / site_url / notes）与浏览器导出（name / url / note），
+/// 表头忽略大小写与首尾空白，首行 BOM 会被去掉。
 fn parse_csv_import(data: &str) -> Result<Vec<ImportEntry>, String> {
-    let mut lines = data.lines().filter(|l| !l.trim().is_empty());
-    let header_line = match lines.next() {
+    let mut records = split_csv_records(data.trim_start_matches('\u{feff}'))
+        .into_iter()
+        .filter(|r| !r.iter().all(|f| f.trim().is_empty()));
+    let header = match records.next() {
         Some(h) => h,
         None => return Err("CSV 内容为空".to_string()),
     };
-    let headers: Vec<&str> = header_line.split(',').map(|s| s.trim()).collect();
-    let idx = |name: &str| headers.iter().position(|h| *h == name);
+    let headers: Vec<String> = header.iter().map(|h| h.trim().to_string()).collect();
+
+    let name_col = find_column(&headers, &["site_name", "name", "title"])
+        .ok_or_else(|| "CSV 缺少站点名列（name / site_name）".to_string())?;
+    let password_col =
+        find_column(&headers, &["password"]).ok_or_else(|| "CSV 缺少 password 列".to_string())?;
+    let url_col = find_column(&headers, &["site_url", "url"]);
+    let username_col = find_column(&headers, &["username"]);
+    let notes_col = find_column(&headers, &["notes", "note"]);
+    let tags_col = find_column(&headers, &["tags"]);
+
     let mut out: Vec<ImportEntry> = Vec::new();
-    for line in lines {
-        let fields = split_csv_line(line);
-        let get = |name: &str| -> Option<String> {
-            idx(name).and_then(|i| fields.get(i).cloned())
+    for (offset, record) in records.enumerate() {
+        let get = |col: Option<usize>| -> Option<String> {
+            col.and_then(|i| record.get(i).cloned())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
         };
-        let site_name = match get("site_name") {
-            Some(x) if !x.is_empty() => x,
-            _ => return Err("CSV 缺少 site_name 字段".to_string()),
+        let site_name = match get(Some(name_col)) {
+            Some(v) => v,
+            None => return Err(format!("CSV 第 {} 行缺少站点名称", offset + 2)),
         };
-        let username = match get("username") {
-            Some(x) if !x.is_empty() => x,
-            _ => return Err("CSV 缺少 username 字段".to_string()),
-        };
-        let password = match get("password") {
-            Some(x) => x,
-            None => return Err("CSV 缺少 password 字段".to_string()),
-        };
+        // 浏览器导出里允许用户名为空；空密码保留，由导入流程按「密码为空」跳过。
+        let username = get(username_col).unwrap_or_default();
+        let password = get(Some(password_col)).unwrap_or_default();
         out.push(ImportEntry {
             site_name,
-            site_url: get("site_url").unwrap_or_default(),
+            site_url: get(url_col).unwrap_or_default(),
             username,
             password,
-            notes: get("notes").filter(|x| !x.is_empty()),
-            tags: get("tags").filter(|x| !x.is_empty()),
+            notes: get(notes_col),
+            tags: get(tags_col),
         });
     }
     Ok(out)
@@ -984,8 +1057,16 @@ fn entry_to_new(p: &PasswordEntry) -> NewPassword {
     }
 }
 
-/// 统一执行导入：按 (站点名, 用户名) 去重，已存在则跳过，否则新增。
+/// 统一执行导入：以「名称 + 网址 + 用户名」作为身份标识（同一站点可以有多个账号），
+/// 已存在的条目用导入内容覆盖（新密码替换旧密码），否则新增。
 fn apply_import(vault: &PasswordOperations, items: Vec<NewPassword>) -> Result<ImportResult, String> {
+    if items.len() > MAX_IMPORT_ENTRIES {
+        return Err(format!(
+            "单次最多导入 {} 条，本次 {} 条",
+            MAX_IMPORT_ENTRIES,
+            items.len()
+        ));
+    }
     let mut result = ImportResult {
         imported_count: 0,
         skipped_count: 0,
@@ -994,21 +1075,45 @@ fn apply_import(vault: &PasswordOperations, items: Vec<NewPassword>) -> Result<I
         errors: Vec::new(),
     };
     let existing = vault.get_passwords().unwrap_or_default();
-    let existing_keys: HashSet<(String, String)> = existing
-        .iter()
-        .map(|e| (e.site_name.clone(), e.username.clone()))
-        .collect();
+    let mut index: HashMap<(String, String, String), i64> = HashMap::new();
+    for e in &existing {
+        if let Some(id) = e.id {
+            index.insert(
+                crate::utils::identity::entry_identity(&e.site_url, &e.site_name, &e.username),
+                id,
+            );
+        }
+    }
     for np in items {
-        let key = (np.site_name.clone(), np.username.clone());
-        if existing_keys.contains(&key) {
+        // 空密码多半是源文件缺少 password 字段，写入会覆盖掉可用密码，直接跳过。
+        if np.password.is_empty() {
             result.skipped_count += 1;
+            result.errors.push(format!("跳过「{}」：密码为空", np.site_name));
             continue;
         }
-        match vault.add_password(np) {
-            Ok(_) => result.imported_count += 1,
-            Err(err) => {
-                result.error_count += 1;
-                result.errors.push(format!("{}", err));
+        let key = crate::utils::identity::entry_identity(&np.site_url, &np.site_name, &np.username);
+        match index.get(&key).copied() {
+            Some(id) => match vault.overwrite_password(id, np) {
+                Ok(_) => result.updated_count += 1,
+                Err(err) => {
+                    result.error_count += 1;
+                    result.errors.push(format!("{}", err));
+                }
+            },
+            None => {
+                let label = np.site_name.clone();
+                match vault.add_password(np) {
+                    Ok(entry) => {
+                        result.imported_count += 1;
+                        if let Some(id) = entry.id {
+                            index.insert(key, id);
+                        }
+                    }
+                    Err(err) => {
+                        result.error_count += 1;
+                        result.errors.push(format!("{}: {}", label, err));
+                    }
+                }
             }
         }
     }
@@ -1041,6 +1146,12 @@ fn import_csv(vault: &PasswordOperations, data: &str) -> Result<ImportResult, St
 
 /// 自动识别 JSON / CSV 并执行导入，返回统计结果。
 fn do_import(vault: &PasswordOperations, data: &str) -> ApiResponse<ImportResult> {
+    if data.len() > MAX_IMPORT_BYTES {
+        return ApiResponse::err_message(format!(
+            "导入文件过大：上限 {} MB",
+            MAX_IMPORT_BYTES / 1024 / 1024
+        ));
+    }
     let trimmed = data.trim();
     let res = if trimmed.starts_with('[') || trimmed.starts_with('{') {
         import_json(vault, data)
@@ -1697,11 +1808,169 @@ mod tests {
         let json = serde_json::to_string(&rt.get_passwords().data.unwrap()).unwrap();
         let imp = rt.import_passwords(json.clone());
         assert!(imp.success, "import: {:?}", imp.error);
-        assert!(imp.data.as_ref().unwrap().skipped_count >= 1);
+        assert_eq!(imp.data.as_ref().unwrap().updated_count, 1);
+        assert_eq!(imp.data.as_ref().unwrap().imported_count, 0);
         let csv = format!("site_name,site_url,username,password,notes,category,tags\n{}\n", "bank.com,https://bank.com,bob,bankpass,,work,bank");
         let imp2 = rt.import_passwords(csv);
         assert!(imp2.success, "csv import: {:?}", imp2.error);
         assert_eq!(imp2.data.as_ref().unwrap().imported_count, 1);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn import_overwrites_by_name_url_and_username() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        rt.add_password(NewPassword {
+            site_name: "Example".into(),
+            site_url: "https://www.example.com/login".into(),
+            username: "alice".into(),
+            password: "old-pass".into(),
+            notes: Some("旧备注".into()),
+            tags: Some(vec!["work".into()]),
+            priority: Some(2),
+        });
+        // 名称/网址写法/用户名大小写不同，仍应识别为同一条并覆盖
+        let csv = "name,url,username,password\nexample,https://example.com/login,Alice,new-pass\n";
+        let imp = rt.import_passwords(csv.to_string());
+        assert!(imp.success, "import: {:?}", imp.error);
+        let data = imp.data.as_ref().unwrap();
+        assert_eq!(data.updated_count, 1);
+        assert_eq!(data.imported_count, 0);
+        assert_eq!(data.skipped_count, 0);
+
+        let entries = rt.get_passwords().data.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].password.as_deref(), Some("new-pass"));
+        assert_eq!(entries[0].username, "Alice");
+        // 导入未提供的备注/标签沿用原值
+        assert_eq!(entries[0].notes.as_deref(), Some("旧备注"));
+        assert_eq!(entries[0].tags, vec!["work".to_string()]);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn import_limits_are_enforced() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+
+        // 文件大小上限：明文导入与加密包都在解析前拒绝
+        let big = "x".repeat(MAX_IMPORT_BYTES + 1);
+        let too_big = rt.import_passwords(big.clone());
+        assert!(!too_big.success);
+        assert!(too_big.error.unwrap().contains("过大"));
+        let too_big_spb = rt.import_encrypted(big, "ExportPass456!".into());
+        assert!(!too_big_spb.success);
+
+        // 条数上限：超限时整批拒绝，不写入任何条目
+        let mut csv = String::from("name,url,username,password\n");
+        for i in 0..=MAX_IMPORT_ENTRIES {
+            csv.push_str(&format!(
+                "site{i},https://s{i}.com,u{i},pass{i}\n"
+            ));
+        }
+        let too_many = rt.import_passwords(csv);
+        assert!(!too_many.success);
+        assert!(too_many.error.unwrap().contains("5000"));
+        assert!(rt.get_passwords().data.unwrap().is_empty());
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn same_site_keeps_multiple_accounts() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        let csv = "name,url,username,password\n\
+GitHub,https://github.com,alice,pass1\n\
+GitHub,https://github.com,bob,pass2\n";
+        let imp = rt.import_passwords(csv.to_string());
+        assert!(imp.success, "import: {:?}", imp.error);
+        assert_eq!(imp.data.as_ref().unwrap().imported_count, 2);
+
+        // 再导入时只覆盖同名同址同用户的那一条
+        let csv2 = "name,url,username,password\nGitHub,https://github.com,bob,pass2-new\n";
+        let imp2 = rt.import_passwords(csv2.to_string());
+        assert!(imp2.success, "import: {:?}", imp2.error);
+        assert_eq!(imp2.data.as_ref().unwrap().updated_count, 1);
+        assert_eq!(imp2.data.as_ref().unwrap().imported_count, 0);
+
+        let entries = rt.get_passwords().data.unwrap();
+        assert_eq!(entries.len(), 2);
+        let alice = entries.iter().find(|e| e.username == "alice").unwrap();
+        let bob = entries.iter().find(|e| e.username == "bob").unwrap();
+        assert_eq!(alice.password.as_deref(), Some("pass1"));
+        assert_eq!(bob.password.as_deref(), Some("pass2-new"));
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn browser_csv_headers_are_supported() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        // 浏览器（Chrome/Edge）导出：BOM + CRLF + name,url,username,password,note，
+        // 最后一行备注里带引号包裹的换行。
+        let csv = "\u{feff}name,url,username,password,note\r\n\
+Google,https://accounts.google.com,alice,chrome-pass,个人账号\r\n\
+GitHub,https://github.com,,gh-pass,\r\n\
+Bank,https://bank.com,bob,bank-pass,\"第一行\n第二行\"\r\n";
+        let imp = rt.import_passwords(csv.to_string());
+        assert!(imp.success, "import: {:?}", imp.error);
+        assert_eq!(imp.data.as_ref().unwrap().imported_count, 3, "{:?}", imp.data);
+
+        let entries = rt.get_passwords().data.unwrap();
+        let google = entries.iter().find(|e| e.site_name == "Google").unwrap();
+        assert_eq!(google.site_url, "https://accounts.google.com");
+        assert_eq!(google.username, "alice");
+        assert_eq!(google.password.as_deref(), Some("chrome-pass"));
+        assert_eq!(google.notes.as_deref(), Some("个人账号"));
+
+        let github = entries.iter().find(|e| e.site_name == "GitHub").unwrap();
+        assert_eq!(github.username, "");
+        assert_eq!(github.password.as_deref(), Some("gh-pass"));
+
+        let bank = entries.iter().find(|e| e.site_name == "Bank").unwrap();
+        assert_eq!(bank.notes.as_deref(), Some("第一行\n第二行"));
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn clear_all_passwords_removes_entries() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        for (site, user) in [("a.com", "alice"), ("b.com", "bob")] {
+            rt.add_password(NewPassword {
+                site_name: site.into(),
+                site_url: format!("https://{}", site),
+                username: user.into(),
+                password: "secret1".into(),
+                notes: None,
+                tags: None,
+                priority: None,
+            });
+        }
+        let cleared = rt.clear_all_passwords();
+        assert!(cleared.success, "clear: {:?}", cleared.error);
+        assert_eq!(cleared.data, Some(2));
+        assert!(rt.get_passwords().data.unwrap().is_empty());
+        assert_eq!(rt.get_password_stats().data.unwrap().total_count, 0);
+        let logs = rt.get_audit_logs().data.unwrap();
+        assert!(logs.iter().any(|l| l.action == "clear_all_passwords"));
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
     }

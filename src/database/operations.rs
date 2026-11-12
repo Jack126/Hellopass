@@ -284,6 +284,75 @@ impl PasswordOperations {
         self.get_password(p.id)
     }
 
+    /// 导入覆盖：用导入记录替换同一身份（名称 + 网址 + 用户名）的旧记录。
+    /// 导入数据视为权威来源，因此不套用「最近密码不可复用」的校验；
+    /// 旧密码仍会写入历史表，便于后续判断复用。
+    /// 未提供（空）的站点名/网址/用户名/备注/标签沿用原值，密码与更新时间一定更新。
+    pub fn overwrite_password(&self, id: i64, p: NewPassword) -> Result<PasswordEntry, OperationError> {
+        let current = self.get_password(id)?;
+
+        let site_name = if p.site_name.trim().is_empty() { current.site_name } else { p.site_name };
+        let site_url = if p.site_url.trim().is_empty() { current.site_url } else { p.site_url };
+        let username = if p.username.trim().is_empty() { current.username } else { p.username };
+        let priority = p.priority.unwrap_or(current.priority);
+        let tags = p.tags.unwrap_or(current.tags);
+        let notes_plain = p.notes.or(current.notes);
+
+        let enc_pwd = self.encrypt_to_b64(&p.password)?;
+        let enc_notes = match notes_plain {
+            Some(n) => Some(self.encrypt_to_b64(&n)?),
+            None => None,
+        };
+        let now = Utc::now().to_rfc3339();
+
+        let affected = self
+            .conn()
+            .execute(
+                "UPDATE passwords SET site_name=?1, site_url=?2, username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, priority=?8 WHERE id=?9",
+                rusqlite::params![
+                    site_name,
+                    site_url,
+                    username,
+                    enc_pwd,
+                    enc_notes,
+                    now,
+                    tags.join(","),
+                    priority,
+                    id
+                ],
+            )
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        if affected == 0 {
+            return Err(OperationError::NotFound);
+        }
+
+        if Some(p.password.as_str()) != current.password.as_deref() {
+            let _ = self.record_password_history(id, &p.password);
+        }
+
+        self.get_password(id)
+    }
+
+    /// 清空所有密码条目及其历史记录，返回删除的条目数。
+    /// 审计日志不在清理范围内（保留操作痕迹）。
+    pub fn delete_all_passwords(&self) -> Result<usize, OperationError> {
+        let total: i64 = self
+            .conn()
+            .query_row("SELECT COUNT(*) FROM passwords", [], |r| r.get(0))
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        self.conn()
+            .execute("DELETE FROM password_history", [])
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        self.conn()
+            .execute("DELETE FROM passwords", [])
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        let _ = self.conn().execute(
+            "DELETE FROM sqlite_sequence WHERE name IN ('passwords', 'password_history')",
+            [],
+        );
+        Ok(total.max(0) as usize)
+    }
+
     /// 删除密码
     pub fn delete_password(&self, id: i64) -> Result<(), OperationError> {
         // 未开启 PRAGMA foreign_keys，需要显式清理历史记录，避免残留已删除条目的密文

@@ -278,9 +278,15 @@ fn change_master_password(
 }
 
 #[tauri::command]
-fn add_password(state: State<'_, VaultState>, password: NewPassword) -> ApiResponse<PasswordEntry> {
-    let mut g = state.lock().unwrap();
-    g.add_password(password)
+fn add_password(app: AppHandle, state: State<'_, VaultState>, password: NewPassword) -> ApiResponse<PasswordEntry> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.add_password(password)
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
 }
 
 #[tauri::command]
@@ -687,6 +693,14 @@ fn register_hotkey_with_fallback(
 }
 
 fn open_settings(app: &AppHandle) {
+    // 打开设置时收起启动器：避免主界面停在屏幕上又失去键盘焦点，Esc 无法关闭
+    if let Some(flags) = app.try_state::<LauncherFlags>() {
+        flags.suppress_hide.store(false, Ordering::Relaxed);
+    }
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.hide();
+        let _ = app.emit("launcher-hidden", ());
+    }
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.show();
         let _ = w.set_focus();
@@ -721,15 +735,39 @@ fn open_settings(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn update_password(state: State<'_, VaultState>, password: UpdatePassword) -> ApiResponse<PasswordEntry> {
-    let mut g = state.lock().unwrap();
-    g.update_password(password)
+fn update_password(app: AppHandle, state: State<'_, VaultState>, password: UpdatePassword) -> ApiResponse<PasswordEntry> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.update_password(password)
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
 }
 
 #[tauri::command]
-fn delete_password(state: State<'_, VaultState>, id: i64) -> ApiResponse<()> {
-    let mut g = state.lock().unwrap();
-    g.delete_password(id)
+fn delete_password(app: AppHandle, state: State<'_, VaultState>, id: i64) -> ApiResponse<()> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.delete_password(id)
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
+}
+
+#[tauri::command]
+fn clear_all_passwords(app: AppHandle, state: State<'_, VaultState>) -> ApiResponse<usize> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.clear_all_passwords()
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
 }
 
 #[tauri::command]
@@ -739,9 +777,15 @@ fn get_password_stats(state: State<'_, VaultState>) -> ApiResponse<PasswordStats
 }
 
 #[tauri::command]
-fn import_passwords(state: State<'_, VaultState>, data: String) -> ApiResponse<ImportResult> {
-    let mut g = state.lock().unwrap();
-    g.import_passwords(data)
+fn import_passwords(app: AppHandle, state: State<'_, VaultState>, data: String) -> ApiResponse<ImportResult> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.import_passwords(data)
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
 }
 
 #[tauri::command]
@@ -751,9 +795,15 @@ fn export_backup(state: State<'_, VaultState>) -> ApiResponse<String> {
 }
 
 #[tauri::command]
-fn restore_backup(state: State<'_, VaultState>, data: String, master_password: String) -> ApiResponse<ImportResult> {
-    let mut g = state.lock().unwrap();
-    g.restore_backup(data, master_password)
+fn restore_backup(app: AppHandle, state: State<'_, VaultState>, data: String, master_password: String) -> ApiResponse<ImportResult> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.restore_backup(data, master_password)
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
 }
 
 #[tauri::command]
@@ -767,9 +817,15 @@ fn export_encrypted(
 }
 
 #[tauri::command]
-fn import_encrypted(state: State<'_, VaultState>, data: String, export_password: String) -> ApiResponse<ImportResult> {
-    let mut g = state.lock().unwrap();
-    g.import_encrypted(data, export_password)
+fn import_encrypted(app: AppHandle, state: State<'_, VaultState>, data: String, export_password: String) -> ApiResponse<ImportResult> {
+    let resp = {
+        let mut g = state.lock().unwrap();
+        g.import_encrypted(data, export_password)
+    };
+    if resp.success {
+        let _ = app.emit("entries-changed", ());
+    }
+    resp
 }
 
 /// 把导出的文件内容写入「下载」目录并返回完整路径。
@@ -1069,6 +1125,7 @@ fn main() {
             search_passwords,
             update_password,
             delete_password,
+            clear_all_passwords,
             get_password_stats,
             import_passwords,
             set_session_timeout,

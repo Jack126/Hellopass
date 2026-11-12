@@ -158,6 +158,16 @@ button.ghost {
   color: var(--text);
 }
 
+button.danger {
+  background: rgba(255, 107, 107, 0.16);
+  color: var(--danger);
+  border: 1px solid rgba(255, 107, 107, 0.45);
+}
+
+.danger-card {
+  border-color: rgba(255, 107, 107, 0.35);
+}
+
 .muted { color: var(--muted); font-size: 12px; margin: 0; }
 .warn-text { color: #f0c060; line-height: 1.5; }
 .error { color: var(--danger); font-size: 12px; margin: 8px 0 0; flex: none; }
