@@ -1,8 +1,9 @@
 {
   "identifier": "default",
-  "description": "Default capability for the main window",
+  "description": "Default capability for launcher and settings windows",
   "windows": [
-    "main"
+    "launcher",
+    "settings"
   ],
   "permissions": [
     "core:default"

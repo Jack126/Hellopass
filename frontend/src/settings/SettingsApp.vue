@@ -32,7 +32,7 @@
               <option :value="30">30 分钟</option>
             </select>
           </label>
-          <p class="muted">启动器只在手动锁定或退出时清空解密数据。</p>
+          <p class="muted">达到设定时长未操作会自动锁定并清空界面上的解密数据；选「不自动锁定」则只在手动锁定或退出时清空。</p>
           <button class="ghost" @click="lockNow">立即锁定</button>
         </div>
 
@@ -62,6 +62,48 @@
             自动模式按窗口高度铺满且不出现滚动条；固定条数超过窗口容量时可以滚动。
             窗口大小自动按鼠标所在屏幕逻辑宽度的 35% 计算（560~900 px），位置跟随鼠标所在显示器。
           </p>
+        </div>
+
+        <div class="card">
+          <h2>背景颜色</h2>
+          <div class="color-row">
+            <input
+              v-model="bgHex"
+              class="hex-input"
+              spellcheck="false"
+              autocomplete="off"
+              maxlength="7"
+              placeholder="#141418"
+              @input="onHexInput"
+            />
+            <input
+              v-model="bgPickerValue"
+              type="color"
+              class="color-input"
+              aria-label="选择背景颜色"
+              @input="onPickerInput"
+            />
+          </div>
+          <div class="swatches" role="listbox" aria-label="预设颜色">
+            <button
+              v-for="c in swatches"
+              :key="c.value"
+              type="button"
+              class="swatch"
+              :class="{ active: isSameColor(bgHex, c.value) }"
+              :style="{ background: c.value }"
+              :title="c.value"
+              :aria-label="`选择颜色 ${c.value}`"
+              @click="chooseColor(c.value)"
+            />
+          </div>
+          <p class="muted">
+            选择启动器窗口的背景色，支持色盘点选或手填十六进制颜色。设置会立即生效并保存。
+          </p>
+          <div class="actions">
+            <button :disabled="savingColor" @click="saveBg">应用</button>
+            <button class="ghost" :disabled="savingColor" @click="resetBg">恢复默认</button>
+          </div>
         </div>
 
         <div class="card">
@@ -105,7 +147,7 @@
         <div class="card">
           <h2>导入密码</h2>
           <p class="muted">
-            支持加密导出包（.spb）以及 JSON / CSV 明文。CSV 是按文件格式识别的，不需要额外的列；
+            支持加密导出包（.spb）以及 JSON / CSV 明文。CSV 按浏览器导出格式识别，
             读取表头 name / url / username / password / note（也兼容本程序的 site_name / site_url / notes）。
             单个文件不超过 5 MB，单次最多导入 5000 条。
           </p>
@@ -160,12 +202,18 @@
           <dl v-if="integrity">
             <dt>SQLite</dt><dd>{{ integrity.sqlite_ok ? '正常' : '异常' }}</dd>
             <dt>数据库大小</dt><dd>{{ (integrity.db_size / 1024).toFixed(1) }} KB</dd>
-            <dt>与基线</dt><dd>{{ integrity.baseline_ok ? '一致' : '不一致' }}</dd>
+            <dt>与基线</dt>
+            <dd>
+              {{ !integrity.baseline_present ? '尚未建立' : integrity.baseline_ok ? '一致' : '不一致' }}
+            </dd>
           </dl>
-          <template v-if="integrity && !integrity.baseline_ok">
+          <template v-if="integrity && (!integrity.baseline_present || !integrity.baseline_ok)">
             <p class="muted warn-text">
-              与上次正常关闭时记录的基线不一致。常见原因：上次没走「退出」而是直接结束了进程、断电，
-              或用外部工具改过数据库。确认是你自己的改动，点下面按钮重建基线即可。
+              {{
+                !integrity.baseline_present
+                  ? '还没有完整性基线：正常锁定一次后会自动建立，也可以现在手动建立。'
+                  : '与上次正常关闭时记录的基线不一致。常见原因：上次没走「退出」而是直接结束了进程、断电，或用外部工具改过数据库。确认是你自己的改动，点下面按钮重建基线即可。'
+              }}
             </p>
             <button class="ghost" :disabled="busy" @click="rebuildBaseline">重建基线</button>
           </template>
@@ -239,7 +287,7 @@
       <section v-else class="pane">
         <div class="card">
           <h2>Hellopass</h2>
-          <p class="muted">版本 1.0.1</p>
+          <p class="muted">版本 1.0.2</p>
         </div>
       </section>
     </main>
@@ -250,7 +298,13 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { listen, request } from '../shared/ipc';
 
-interface Integrity { sqlite_ok: boolean; db_size: number; baseline_ok: boolean; db_checksum: string }
+interface Integrity {
+  sqlite_ok: boolean;
+  db_size: number;
+  baseline_present: boolean;
+  baseline_ok: boolean;
+  db_checksum: string;
+}
 interface Stats { total_count: number }
 interface Expiry { id: number; site_name: string; days_until_expiry: number; expired: boolean }
 interface AuditLog { id: number; timestamp: string; action: string; success: boolean }
@@ -272,9 +326,26 @@ const notice = ref('');
 const noticeTab = ref('general');
 const noticeKind = ref<'ok' | 'bad'>('ok');
 
-const autoLock = ref(0);
+const autoLock = ref(5);
 const windowPreset = ref('auto');
 const resultLimit = ref(0);
+const bgHex = ref('#141418');
+const bgPickerValue = ref('#141418');
+const savingColor = ref(false);
+const swatches = [
+  { value: '#141418' },
+  { value: '#0f172a' },
+  { value: '#1e1b4b' },
+  { value: '#052e16' },
+  { value: '#451a03' },
+  { value: '#3b0764' },
+  { value: '#082f49' },
+  { value: '#1c1917' },
+  { value: '#431407' },
+  { value: '#1a2e05' },
+  { value: '#500724' },
+  { value: '#172554' },
+];
 const wakeDisplay = ref('Ctrl + Alt + Space');
 const lockDisplay = ref('Ctrl + Shift + L');
 const wakeAccel = ref('control+alt+space');
@@ -542,11 +613,14 @@ function readFile(file: File): Promise<string> {
 
 async function loadUiInfo() {
   const info = await guard(() =>
-    request<{ window_preset: string; result_limit: number }>('get_ui_info')
+    request<{ window_preset: string; result_limit: number; background_color: string }>('get_ui_info')
   );
   if (info) {
     windowPreset.value = info.window_preset;
     resultLimit.value = info.result_limit;
+    const normalized = normalizeHex(info.background_color) ?? '#141418';
+    bgHex.value = normalized;
+    bgPickerValue.value = normalized;
   }
 }
 
@@ -564,6 +638,62 @@ async function saveResultLimit() {
     return true;
   });
   if (ok) setNotice('结果条数已更新');
+}
+
+function normalizeHex(input: string): string | null {
+  const raw = input.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]+$/.test(raw)) return null;
+  const full = raw.length === 3 ? [...raw].map((c) => c + c).join('') : raw;
+  if (full.length !== 6) return null;
+  return `#${full.toLowerCase()}`;
+}
+
+function isSameColor(a: string, b: string): boolean {
+  const na = normalizeHex(a);
+  const nb = normalizeHex(b);
+  return !!na && !!nb && na === nb;
+}
+
+function onHexInput() {
+  const normalized = normalizeHex(bgHex.value);
+  if (normalized) {
+    bgPickerValue.value = normalized;
+    bgHex.value = normalized;
+  }
+}
+
+function onPickerInput() {
+  bgHex.value = bgPickerValue.value;
+}
+
+function chooseColor(color: string) {
+  bgHex.value = color;
+  bgPickerValue.value = color;
+}
+
+function resetBg() {
+  bgHex.value = '#141418';
+  bgPickerValue.value = '#141418';
+  void saveBg();
+}
+
+async function saveBg() {
+  const normalized = normalizeHex(bgHex.value);
+  if (!normalized) {
+    setError('颜色格式应为 #rgb 或 #rrggbb');
+    return;
+  }
+  savingColor.value = true;
+  const ok = await guard(async () => {
+    const saved = await request<string>('set_background_color', { color: normalized });
+    return saved;
+  });
+  savingColor.value = false;
+  if (ok !== undefined) {
+    bgHex.value = ok;
+    bgPickerValue.value = ok;
+    setNotice('背景颜色已更新');
+  }
 }
 
 async function saveAutoLock() {
@@ -764,6 +894,7 @@ async function loadAudit() {
 }
 
 let unlistenLock: (() => void) | null = null;
+let statusTimer: number | null = null;
 
 async function refreshLockState() {
   try {
@@ -798,18 +929,30 @@ function applyLocked() {
 }
 
 onBeforeUnmount(() => {
+  if (statusTimer) window.clearInterval(statusTimer);
   if (clearTimer) window.clearTimeout(clearTimer);
   if (recordingKind.value) void request('end_hotkey_capture');
   unlistenLock?.();
   window.removeEventListener('focus', refreshLockState);
+  window.removeEventListener('vault-locked', applyLocked);
 });
 
 onMounted(async () => {
-  autoLock.value = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
+  autoLock.value = Number(localStorage.getItem('sp.autoLockMinutes') ?? '5') || 0;
   await loadHotkey();
   await loadUiInfo();
   window.addEventListener('focus', refreshLockState);
+  window.addEventListener('vault-locked', applyLocked);
   unlistenLock = await listen('vault-locked', applyLocked);
+  // 空闲超时由后端判定：设置窗打开期间也要及时退出解锁态
+  statusTimer = window.setInterval(() => {
+    if (!unlocked.value) return;
+    void request<boolean>('vault_status')
+      .then((ok) => {
+        if (!ok) applyLocked();
+      })
+      .catch(() => {});
+  }, 15_000);
   const s = await guard(() => request<boolean>('vault_status'));
   unlocked.value = !!s;
   if (unlocked.value) {

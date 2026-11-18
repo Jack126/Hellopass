@@ -1,5 +1,5 @@
 <template>
-  <div class="panel" :class="{ tall: isTall }">
+  <div class="panel" :class="{ tall: isTall }" :style="{ '--bg': bgColor }">
     <!-- 搜索 -->
     <template v-if="mode === 'search'">
       <div class="searchbar">
@@ -129,13 +129,55 @@
       <label>用户名<input v-model="form.username" /></label>
       <label>
         密码
-        <input
-          v-model="form.password"
-          type="password"
-          :placeholder="editingId ? '留空则不修改' : '必填'"
-          autocomplete="new-password"
-        />
+        <span class="password-field">
+          <input
+            v-model="form.password"
+            :type="showGenerated ? 'text' : 'password'"
+            :placeholder="editingId ? '留空则不修改' : '必填'"
+            autocomplete="new-password"
+          />
+          <button
+            type="button"
+            class="mini"
+            :disabled="busy"
+            title="生成随机密码"
+            @click="generatePassword"
+          >
+            🎲 生成
+          </button>
+        </span>
       </label>
+      <div class="generator">
+        <div class="generator-head">
+          <span>生成器</span>
+          <span class="generator-value" :title="generatedPassword">{{ generatedPassword }}</span>
+        </div>
+        <div class="generator-row">
+          <label class="inline">
+            长度
+            <input
+              v-model.number="genLength"
+              type="number"
+              min="8"
+              max="64"
+              @change="clampGenLength"
+            />
+          </label>
+          <label class="inline">
+            <input v-model="genUpper" type="checkbox" /> 大写 A-Z
+          </label>
+          <label class="inline">
+            <input v-model="genLower" type="checkbox" /> 小写 a-z
+          </label>
+          <label class="inline">
+            <input v-model="genDigits" type="checkbox" /> 数字 0-9
+          </label>
+          <label class="inline">
+            <input v-model="genSymbols" type="checkbox" /> 特殊字符
+          </label>
+        </div>
+        <p v-if="genError" class="error">{{ genError }}</p>
+      </div>
       <label>网址<input v-model="form.site_url" placeholder="https://" /></label>
       <label>标签<input v-model="form.tags" placeholder="用逗号分隔" /></label>
       <label>备注<textarea v-model="form.notes" rows="2"></textarea></label>
@@ -167,6 +209,8 @@ const error = ref('');
 const composing = ref(false);
 const editingId = ref<number | null>(null);
 const confirmDelete = ref(false);
+let revealTimer: number | null = null;
+let statusTimer: number | null = null;
 
 const searchInput = ref<HTMLInputElement>();
 const authInput = ref<HTMLInputElement>();
@@ -182,6 +226,15 @@ const form = reactive({
 });
 
 const resultLimit = ref(0); // 0 = 自动填满
+const bgColor = ref('#141418');
+const showGenerated = ref(false);
+const generatedPassword = ref('');
+const genLength = ref(16);
+const genUpper = ref(true);
+const genLower = ref(true);
+const genDigits = ref(true);
+const genSymbols = ref(true);
+const genError = ref('');
 const fitCount = ref(7);
 const resultsWrap = ref<HTMLElement>();
 let listObserver: ResizeObserver | null = null;
@@ -234,11 +287,17 @@ function segmentsFor(r: { item: Summary; ranges: [number, number][] }) {
 }
 
 function resetSensitive() {
+  if (revealTimer) {
+    window.clearTimeout(revealTimer);
+    revealTimer = null;
+  }
   revealed.value = null;
   detail.value = null;
   password.value = '';
   password2.value = '';
   form.password = '';
+  generatedPassword.value = '';
+  showGenerated.value = false;
 }
 
 async function refresh() {
@@ -271,8 +330,9 @@ async function onShown() {
     try {
       const info = await api.uiInfo();
       resultLimit.value = info.result_limit;
+      bgColor.value = info.background_color;
     } catch {
-      // 读不到偏好时按自动填满处理
+      // 读不到偏好时按默认主题处理
     }
     if (!(await api.isSet())) {
       mode.value = 'setup';
@@ -390,6 +450,14 @@ async function copy(field: 'password' | 'username') {
   }
 }
 
+/// 锁定时清空本地明文与列表；Tauri 事件与 DOM 兜底事件共用。
+function onVaultLocked() {
+  resetSensitive();
+  items.value = [];
+  mode.value = 'unlock';
+  void api.suppressHide(true);
+}
+
 async function hide() {
   resetSensitive();
   await api.suppressHide(false);
@@ -472,6 +540,59 @@ function cancelEdit() {
   }
 }
 
+const GEN_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const GEN_LOWER = 'abcdefghijklmnopqrstuvwxyz';
+const GEN_DIGITS = '0123456789';
+const GEN_SYMBOLS = '!@#$%^&*()-_=+[]{};:,.<>?/~';
+
+function clampGenLength() {
+  const n = Math.floor(Number(genLength.value));
+  genLength.value = Number.isFinite(n) ? Math.min(64, Math.max(8, n)) : 16;
+}
+
+function secureRandomInt(max: number): number {
+  const buf = new Uint32Array(1);
+  const limit = Math.floor(0x100000000 / max) * max;
+  let value: number;
+  do {
+    window.crypto.getRandomValues(buf);
+    value = buf[0];
+  } while (value >= limit);
+  return value % max;
+}
+
+function generatePassword() {
+  genError.value = '';
+  const sets: string[] = [];
+  if (genUpper.value) sets.push(GEN_UPPER);
+  if (genLower.value) sets.push(GEN_LOWER);
+  if (genDigits.value) sets.push(GEN_DIGITS);
+  if (genSymbols.value) sets.push(GEN_SYMBOLS);
+  if (!sets.length) {
+    genError.value = '请至少选择一种字符集';
+    return;
+  }
+  clampGenLength();
+  const length = genLength.value;
+  const all = sets.join('');
+  const required = sets.map((set) => set[secureRandomInt(set.length)]);
+  const rest = Array.from({ length: Math.max(0, length - required.length) }, () =>
+    all[secureRandomInt(all.length)]
+  );
+  const chars = [...required, ...rest];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = secureRandomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  const next = chars.join('');
+  generatedPassword.value = next;
+  form.password = next;
+  showGenerated.value = true;
+  window.setTimeout(() => {
+    if (generatedPassword.value === next) showGenerated.value = false;
+  }, 10_000);
+}
+
 async function save() {
   error.value = '';
   if (!form.site_name.trim()) {
@@ -544,6 +665,12 @@ async function showPassword() {
   if (mode.value !== 'detail' || !detail.value || revealed.value) return;
   try {
     revealed.value = await api.reveal(detail.value.id);
+    // 明文最多显示 10 秒，之后自动重新遮蔽
+    if (revealTimer) window.clearTimeout(revealTimer);
+    revealTimer = window.setTimeout(() => {
+      revealed.value = null;
+      revealTimer = null;
+    }, 10_000);
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -592,16 +719,22 @@ let unlisten: Array<() => void> = [];
 
 onMounted(async () => {
   // 恢复上次在设置窗里选择的自动锁时长（0 = 不自动锁）
-  const minutes = Number(localStorage.getItem('sp.autoLockMinutes') ?? '0') || 0;
+  const minutes = Number(localStorage.getItem('sp.autoLockMinutes') ?? '5') || 0;
   await api.setSessionTimeout(minutes * 60).catch(() => {});
   window.addEventListener('keydown', onGlobalKey);
   window.addEventListener('keydown', onWindowKeydown);
   window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('vault-locked', onVaultLocked);
   window.addEventListener('focus', () => void syncEntries());
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) void syncEntries();
   });
   unlisten.push(await listen('launcher-shown', () => void onShown()));
+  unlisten.push(
+    await listen<string>('ui-background-changed', (color) => {
+      bgColor.value = color;
+    })
+  );
   unlisten.push(
     await listen('entries-changed', () => {
       if (!document.hidden) void syncEntries();
@@ -614,21 +747,27 @@ onMounted(async () => {
       if (mode.value === 'detail') void goSearch();
     })
   );
-  unlisten.push(
-    await listen('vault-locked', () => {
-      resetSensitive();
-      items.value = [];
-      mode.value = 'unlock';
-      void api.suppressHide(true);
-    })
-  );
+  unlisten.push(await listen('vault-locked', onVaultLocked));
+  // 空闲超时由后端判定：界面可见时定期确认，锁定后立即清掉明文与列表
+  statusTimer = window.setInterval(() => {
+    if (document.hidden || mode.value === 'edit' || mode.value === 'setup') return;
+    void api
+      .status()
+      .then((ok) => {
+        if (!ok) onVaultLocked();
+      })
+      .catch(() => {});
+  }, 15_000);
   await onShown();
 });
 
 onBeforeUnmount(() => {
+  if (statusTimer) window.clearInterval(statusTimer);
+  if (revealTimer) window.clearTimeout(revealTimer);
   window.removeEventListener('keydown', onGlobalKey);
   window.removeEventListener('keydown', onWindowKeydown);
   window.removeEventListener('keyup', onKeyUp);
+  window.removeEventListener('vault-locked', onVaultLocked);
   listObserver?.disconnect();
   unlisten.forEach((fn) => fn());
 });

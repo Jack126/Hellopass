@@ -237,6 +237,62 @@ th { color: var(--muted); font-weight: 500; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hex-input {
+  width: 120px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  text-transform: lowercase;
+}
+
+.color-input {
+  width: 44px;
+  height: 38px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 6px;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.swatch {
+  align-self: stretch;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.swatch:hover {
+  border-color: var(--accent);
+}
+
+.swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .hotkey-row {
   display: flex;
   align-items: center;

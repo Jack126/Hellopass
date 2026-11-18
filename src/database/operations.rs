@@ -367,6 +367,11 @@ impl PasswordOperations {
         Ok(())
     }
 
+    /// 受保护内容的聚合哈希（passwords + password_history），供完整性基线使用。
+    pub fn content_hash(&self) -> Option<String> {
+        self.database.protected_content_hash()
+    }
+
     /// 数据库统计
     pub fn get_stats(&self) -> Result<crate::database::DatabaseStats, OperationError> {
         self.database.get_stats().map_err(|e| OperationError::DatabaseError(e.to_string()))

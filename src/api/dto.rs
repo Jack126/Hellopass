@@ -170,6 +170,8 @@ pub struct IntegrityReport {
     pub db_checksum: String,
     pub db_size: u64,
     pub config_checksum: Option<String>,
+    /// 是否已建立基线（首次正常锁定后才会写入）
+    pub baseline_present: bool,
     /// 与上次正常锁定写入的基线是否一致（无基线时为 true）
     pub baseline_ok: bool,
 }

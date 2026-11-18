@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  --bg: rgba(20, 20, 24, 0.97);
+  --bg: #141418;
   --line: rgba(255, 255, 255, 0.08);
   --text: #e7e7ea;
   --muted: #9b9ba6;
@@ -380,6 +380,72 @@ button.danger {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 4px;
+}
+
+.password-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.password-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.generator {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.generator-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.generator-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Cascadia Code", Consolas, monospace;
+  color: var(--text);
+}
+
+.generator-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.generator-row .inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.generator-row input[type='number'] {
+  width: 64px;
+  padding: 4px 6px;
+}
+
+.generator-row input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .edit .error {

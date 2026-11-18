@@ -8,9 +8,10 @@ use crate::api::dto::*;
 use crate::database::Database;
 use crate::database::operations::{PasswordOperations, OperationError};
 use crate::security::MasterPasswordManager;
-use crate::security::crypto::SecureCryptoEngine;
+use crate::security::crypto::{SecureCryptoEngine, MAX_PBKDF2_ITERATIONS, MIN_PBKDF2_ITERATIONS};
 use crate::security::policies::{validate_password_strength, PasswordStrengthResult};
 use crate::utils::log;
+use crate::utils::secure_file::write_private;
 use crate::error::{AppError, AppResult};
 
 /// 把 AppResult 统一转换为 ApiResponse，并记录错误日志。
@@ -68,8 +69,8 @@ impl VaultRuntime {
             failed_attempts: 0,
             lockout_until: None,
             last_activity: None,
-            // 启动器形态下默认不自动锁定；设置窗里可改为 5/15/30 分钟
-            session_timeout: Duration::zero(),
+            // 默认 5 分钟空闲自动锁定；设置窗里可改为 15/30 分钟或关闭
+            session_timeout: Duration::minutes(5),
             max_attempts: 5,
             lockout_duration: Duration::minutes(30),
             integrity_warning: None,
@@ -107,7 +108,7 @@ impl VaultRuntime {
         if let Ok(json) = serde_json::to_string(&state) {
             let path = self.lockout_state_path();
             let tmp = path.with_extension("json.tmp");
-            if std::fs::write(&tmp, json).is_ok() {
+            if write_private(&tmp, json.as_bytes()).is_ok() {
                 let _ = std::fs::rename(&tmp, &path);
             }
         }
@@ -161,14 +162,13 @@ impl VaultRuntime {
             self.failed_attempts = 0;
             self.clear_lockout_state();
         }
-        // 完整性基线校验（在打开数据库前读取文件，避免受连接影响）
-        let baseline_warning = self.verify_baseline();
-
         // 提前打开数据库，以便记录（含失败的）解锁尝试
         let db = match Database::new(&self.db_path) {
             Ok(d) => d,
             Err(e) => return ApiResponse::err_message(format!("打开数据库失败: {}", e)),
         };
+        // 完整性基线校验：只哈希受保护内容，审计日志写入不影响结果
+        let baseline_warning = self.verify_baseline(&db);
         let mut mgr = MasterPasswordManager::new(self.dir());
         let verify = mgr.verify_password(master_password);
         match &verify {
@@ -230,15 +230,18 @@ impl VaultRuntime {
 
     /// 锁定：记录审计并丢弃内存中的保险库。
     pub fn lock(&mut self) {
-        self.vault.as_ref().map(|v| {
-            v.add_audit_log("lock", Some("session"), None, None, true, None)
-        });
+        if let Some(v) = &self.vault {
+            v.add_audit_log("lock", Some("session"), None, None, true, None);
+        }
+        // 基线取「受保护内容」哈希，先算再丢弃连接；审计日志不参与
+        let baseline = self.vault.as_ref().and_then(|v| v.content_hash());
         let was_open = self.vault.is_some();
         self.vault = None;
         self.last_activity = None;
         if was_open {
-            // 正常锁定后写入数据库文件基线，供下次解锁时比对
-            self.write_baseline();
+            if let Some(sum) = baseline {
+                self.write_baseline_value(&sum);
+            }
         }
     }
 
@@ -256,9 +259,41 @@ impl VaultRuntime {
     }
 
     fn try_change_password(&mut self, old_password: &str, new_password: &str) -> AppResult<()> {
+        // 与 unlock 共用失败计数与锁定，避免已解锁会话被无限次试探主密码
+        self.load_lockout_state();
+        if let Some(t) = self.lockout_until {
+            if Utc::now() < t {
+                return Err(AppError::Message(format!(
+                    "账户已锁定，请于 {} 后重试",
+                    t.to_rfc3339()
+                )));
+            }
+            self.lockout_until = None;
+            self.failed_attempts = 0;
+            self.clear_lockout_state();
+        }
+
         let dir = self.dir();
         let mut old_mgr = MasterPasswordManager::new(dir);
-        old_mgr.verify_password(old_password)?;
+        if let Err(e) = old_mgr.verify_password(old_password) {
+            let msg = e.to_string();
+            self.failed_attempts += 1;
+            if self.failed_attempts >= self.max_attempts {
+                self.lockout_until = Some(Utc::now() + self.lockout_duration);
+            }
+            self.save_lockout_state();
+            if let Some(v) = &self.vault {
+                v.add_audit_log(
+                    "change_master_password",
+                    Some("session"),
+                    None,
+                    None,
+                    false,
+                    Some(&msg),
+                );
+            }
+            return Err(e.into());
+        }
         let old_crypto = old_mgr.get_crypto_engine()?.clone();
 
         if !MasterPasswordManager::password_is_strong(new_password) {
@@ -373,7 +408,8 @@ impl VaultRuntime {
             return locked();
         }
         let config_checksum = self.config_checksum();
-        // 基线只在解锁前比对一次：解锁本身会写审计日志，会话内再比对必然不一致。
+        let baseline_present = self.baseline_path().exists();
+        // 基线只在解锁时比对一次（会话内的修改会让当前内容与上次锁定时不同）。
         let baseline_ok = self.integrity_warning.is_none();
         let result = self.with_vault(|v| {
             let (sqlite_ok, db_checksum, db_size) = v.check_integrity()?;
@@ -382,6 +418,7 @@ impl VaultRuntime {
                 db_checksum,
                 db_size,
                 config_checksum,
+                baseline_present,
                 baseline_ok,
             })
         });
@@ -404,34 +441,26 @@ impl VaultRuntime {
         PathBuf::from(format!("{}.integrity", self.db_path.display()))
     }
 
-    fn file_sha256(path: &std::path::Path) -> Option<String> {
-        use sha2::{Sha256, Digest};
-        let data = std::fs::read(path).ok()?;
-        let mut hasher = Sha256::new();
-        hasher.update(&data);
-        Some(format!("{:x}", hasher.finalize()))
-    }
-
-    fn write_baseline(&self) {
-        if let Some(sum) = Self::file_sha256(&self.db_path) {
-            let _ = std::fs::write(self.baseline_path(), sum);
+    fn write_baseline_value(&self, sum: &str) {
+        if let Err(e) = write_private(self.baseline_path(), sum) {
+            log::error("integrity", &format!("写入完整性基线失败: {}", e));
         }
     }
 
     /// 返回基线不一致的告警；无基线或一致时返回 None。
-    fn verify_baseline(&self) -> Option<String> {
+    fn verify_baseline(&self, db: &Database) -> Option<String> {
         let expected = std::fs::read_to_string(self.baseline_path()).ok()?;
         let expected = expected.trim().to_string();
         if expected.is_empty() {
             return None;
         }
-        let actual = Self::file_sha256(&self.db_path)?;
+        let actual = db.protected_content_hash()?;
         if actual == expected {
             None
         } else {
             let e = &expected[..expected.len().min(12)];
             let a = &actual[..actual.len().min(12)];
-            Some(format!("数据库文件完整性校验失败：基线 {}，当前 {}", e, a))
+            Some(format!("密码数据完整性校验失败：基线 {}，当前 {}", e, a))
         }
     }
 
@@ -440,12 +469,14 @@ impl VaultRuntime {
         self.integrity_warning.as_deref()
     }
 
-    /// 把当前数据库文件记为新的可信基线（用于确认「不一致」是正常改动后手动消除告警）。
+    /// 把当前受保护内容记为新的可信基线（用于确认「不一致」是正常改动后手动消除告警）。
     pub fn rebuild_baseline(&mut self) -> ApiResponse<()> {
         if !self.enforce_session() {
             return locked();
         }
-        self.write_baseline();
+        if let Some(sum) = self.vault.as_ref().and_then(|v| v.content_hash()) {
+            self.write_baseline_value(&sum);
+        }
         self.integrity_warning = None;
         if let Some(v) = &self.vault {
             v.add_audit_log("rebuild_baseline", Some("integrity"), None, None, true, None);
@@ -837,6 +868,7 @@ impl VaultRuntime {
         if pkg.version != "2.0" {
             return Err(AppError::Message("不支持的备份版本".to_string()));
         }
+        check_kdf_iterations(pkg.iterations)?;
         let salt = base64::engine::general_purpose::STANDARD
             .decode(&pkg.salt)
             .map_err(|_| AppError::Message("备份 salt 损坏".to_string()))?;
@@ -887,6 +919,7 @@ impl VaultRuntime {
         if pkg.version != "1.0" {
             return Err(AppError::Message("不支持的备份版本".to_string()));
         }
+        check_kdf_iterations(pkg.iterations)?;
         let salt = base64::engine::general_purpose::STANDARD
             .decode(&pkg.salt)
             .map_err(|_| AppError::Message("备份 salt 损坏".to_string()))?;
@@ -932,6 +965,17 @@ struct BackupPackage {
     iterations: u32,
     salt: String,
     data: String,
+}
+
+/// 校验备份包内自描述的 KDF 迭代次数：过低会削弱离线破解成本，过高会被用来拖死 CPU。
+fn check_kdf_iterations(iterations: u32) -> AppResult<()> {
+    if !(MIN_PBKDF2_ITERATIONS..=MAX_PBKDF2_ITERATIONS).contains(&iterations) {
+        return Err(AppError::Message(format!(
+            "备份的 KDF 迭代次数异常：{}（允许 {} ~ {}）",
+            iterations, MIN_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS
+        )));
+    }
+    Ok(())
 }
 
 /// 导入辅助结构：CSV 解析后的单条记录。
@@ -1758,8 +1802,8 @@ mod tests {
     fn session_timeout_defaults_and_clamps() {
         let (db, cfg) = tmp();
         let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
-        // 启动器默认不自动锁定
-        assert_eq!(rt.session_timeout.num_seconds(), 0);
+        // 默认 5 分钟空闲自动锁定
+        assert_eq!(rt.session_timeout.num_seconds(), 300);
         rt.set_session_timeout(0);
         assert_eq!(rt.session_timeout.num_seconds(), 0);
         // 下限 10 秒
@@ -1849,6 +1893,97 @@ mod tests {
         // 导入未提供的备注/标签沿用原值
         assert_eq!(entries[0].notes.as_deref(), Some("旧备注"));
         assert_eq!(entries[0].tags, vec!["work".to_string()]);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn baseline_ignores_audit_writes_and_detects_tamper() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        rt.add_password(NewPassword {
+            site_name: "example.com".into(),
+            site_url: "https://example.com".into(),
+            username: "alice".into(),
+            password: "secret".into(),
+            notes: None,
+            tags: None,
+            priority: None,
+        });
+        rt.lock(); // 建立基线
+
+        // 失败解锁会写审计日志，但不应污染受保护内容的基线
+        let mut rt2 = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(!rt2.unlock("WrongPass123!").success);
+
+        let mut rt3 = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(rt3.unlock("StrongPass123!").success);
+        assert!(
+            rt3.integrity_warning().is_none(),
+            "审计写入不应触发基线告警: {:?}",
+            rt3.integrity_warning()
+        );
+        rt3.lock();
+
+        // 直接篡改密码密文，应被内容基线发现
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute("UPDATE passwords SET encrypted_password = 'forged'", [])
+                .unwrap();
+        }
+        let mut rt4 = VaultRuntime::new(cfg.clone(), db.clone());
+        assert!(rt4.unlock("StrongPass123!").success);
+        assert!(rt4.integrity_warning().is_some());
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn change_password_failures_trigger_lockout() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        for _ in 0..5 {
+            let resp = rt.change_password("WrongPass123!", "NewStrongPass456!");
+            assert!(!resp.success);
+        }
+        // 5 次失败后进入锁定：即使旧密码正确也拒绝
+        let resp = rt.change_password("StrongPass123!", "NewStrongPass456!");
+        assert!(!resp.success);
+        assert!(resp.error.unwrap().contains("锁定"));
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn backup_with_weak_kdf_iterations_is_rejected() {
+        let (db, cfg) = tmp();
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        rt.setup("StrongPass123!");
+        assert!(rt.unlock("StrongPass123!").success);
+        let salt = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+        let pkg = serde_json::json!({
+            "version": "2.0",
+            "kdf": "PBKDF2-HMAC-SHA256",
+            "iterations": 1,
+            "salt": salt,
+            "data": "AAAA",
+        });
+        let resp = rt.import_encrypted(pkg.to_string(), "ExportPass456!".into());
+        assert!(!resp.success);
+        assert!(resp.error.unwrap().contains("迭代次数"), "应拒绝被降级的 KDF");
+
+        let backup = serde_json::json!({
+            "version": "1.0",
+            "iterations": 1,
+            "salt": salt,
+            "data": "AAAA",
+        });
+        let resp2 = rt.restore_backup(backup.to_string(), "StrongPass123!".into());
+        assert!(!resp2.success);
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
     }

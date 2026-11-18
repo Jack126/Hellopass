@@ -27,41 +27,80 @@ struct LauncherFlags {
     suppress_hide: AtomicBool,
 }
 
-/// 界面偏好：窗口大小 + 结果条数（0 = 自动填满），落盘到 config/ui.json。
+/// 界面偏好：窗口大小 + 结果条数（0 = 自动填满）+ 主题色，落盘到 config/ui.json。
+#[derive(Clone)]
+struct UiPrefsData {
+    preset: String,
+    result_limit: u32,
+    background_color: String,
+}
+
 struct UiPrefs {
     preset: Mutex<String>,
     result_limit: Mutex<u32>,
+    background_color: Mutex<String>,
     path: std::path::PathBuf,
 }
 
-fn load_ui_prefs(path: &std::path::Path) -> (String, u32) {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return ("auto".to_string(), 0);
+const DEFAULT_BACKGROUND_COLOR: &str = "#141418";
+
+/// 接受 #rgb / #rrggbb，统一规范化成小写 #rrggbb。
+fn normalize_color(input: &str) -> Option<String> {
+    let hex = input.trim().strip_prefix('#')?;
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let full = match hex.len() {
+        3 => hex.chars().flat_map(|c| [c, c]).collect::<String>(),
+        6 => hex.to_string(),
+        _ => return None,
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return ("auto".to_string(), 0);
-    };
-    let preset = value
-        .get("window_preset")
-        .and_then(|v| v.as_str())
-        .filter(|s| crate::utils::window_size::is_valid_preset(s))
-        .unwrap_or("auto")
-        .to_string();
-    let limit = value
-        .get("result_limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    (preset, limit)
+    Some(format!("#{full}"))
 }
 
-fn save_ui_prefs(path: &std::path::Path, preset: &str, result_limit: u32) {
+fn load_ui_prefs(path: &std::path::Path) -> UiPrefsData {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return UiPrefsData {
+            preset: "auto".to_string(),
+            result_limit: 0,
+            background_color: DEFAULT_BACKGROUND_COLOR.to_string(),
+        };
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return UiPrefsData {
+            preset: "auto".to_string(),
+            result_limit: 0,
+            background_color: DEFAULT_BACKGROUND_COLOR.to_string(),
+        };
+    };
+    UiPrefsData {
+        preset: value
+            .get("window_preset")
+            .and_then(|v| v.as_str())
+            .filter(|s| crate::utils::window_size::is_valid_preset(s))
+            .unwrap_or("auto")
+            .to_string(),
+        result_limit: value
+            .get("result_limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        background_color: value
+            .get("background_color")
+            .and_then(|v| v.as_str())
+            .and_then(normalize_color)
+            .unwrap_or_else(|| DEFAULT_BACKGROUND_COLOR.to_string()),
+    }
+}
+
+fn save_ui_prefs(path: &std::path::Path, prefs: &UiPrefsData) {
     let body = serde_json::json!({
-        "window_preset": preset,
-        "result_limit": result_limit,
+        "window_preset": prefs.preset,
+        "result_limit": prefs.result_limit,
+        "background_color": prefs.background_color,
     })
     .to_string();
     let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, body).is_ok() {
+    if crate::utils::secure_file::write_private(&tmp, body.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, path);
     }
 }
@@ -70,6 +109,7 @@ fn save_ui_prefs(path: &std::path::Path, preset: &str, result_limit: u32) {
 struct UiInfo {
     window_preset: String,
     result_limit: u32,
+    background_color: String,
 }
 
 fn monitor_under_cursor(app: &AppHandle) -> Option<tauri::Monitor> {
@@ -236,7 +276,7 @@ fn save_accels(path: &std::path::Path, wake: &str, lock: &str) {
     })
     .to_string();
     let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, body).is_ok() {
+    if crate::utils::secure_file::write_private(&tmp, body.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, path);
     }
 }
@@ -261,9 +301,16 @@ fn unlock(state: State<'_, VaultState>, master_password: String) -> ApiResponse<
 
 #[tauri::command]
 fn lock(app: AppHandle, state: State<'_, VaultState>) -> ApiResponse<()> {
-    let mut g = state.lock().unwrap();
-    g.lock();
+    {
+        let mut g = state.lock().unwrap();
+        g.lock();
+    }
     clear_clipboard_if_ours(&app);
+    // 收起启动器并通知所有窗口清理界面上的明文
+    if let Some(w) = app.get_webview_window("launcher") {
+        let _ = w.hide();
+    }
+    let _ = app.emit("vault-locked", ());
     ApiResponse::ok(())
 }
 
@@ -584,11 +631,21 @@ fn resize_launcher(app: AppHandle, expanded: bool) -> ApiResponse<()> {
     ApiResponse::ok(())
 }
 
+fn ui_prefs_data(state: &UiPrefs) -> UiPrefsData {
+    UiPrefsData {
+        preset: state.preset.lock().unwrap().clone(),
+        result_limit: *state.result_limit.lock().unwrap(),
+        background_color: state.background_color.lock().unwrap().clone(),
+    }
+}
+
 #[tauri::command]
 fn get_ui_info(state: State<'_, UiPrefs>) -> ApiResponse<UiInfo> {
+    let prefs = ui_prefs_data(&state);
     ApiResponse::ok(UiInfo {
-        window_preset: state.preset.lock().unwrap().clone(),
-        result_limit: *state.result_limit.lock().unwrap(),
+        window_preset: prefs.preset,
+        result_limit: prefs.result_limit,
+        background_color: prefs.background_color,
     })
 }
 
@@ -602,8 +659,7 @@ fn set_window_preset(
         return ApiResponse::err_message("未知的窗口大小");
     }
     *state.preset.lock().unwrap() = preset.clone();
-    let limit = *state.result_limit.lock().unwrap();
-    save_ui_prefs(&state.path, &preset, limit);
+    save_ui_prefs(&state.path, &ui_prefs_data(&state));
     apply_launcher_size(&app, false, false);
     ApiResponse::ok(())
 }
@@ -615,9 +671,25 @@ fn set_result_limit(state: State<'_, UiPrefs>, limit: u32) -> ApiResponse<()> {
         return ApiResponse::err_message("结果条数需在 3~30 之间");
     }
     *state.result_limit.lock().unwrap() = limit;
-    let preset = state.preset.lock().unwrap().clone();
-    save_ui_prefs(&state.path, &preset, limit);
+    save_ui_prefs(&state.path, &ui_prefs_data(&state));
     ApiResponse::ok(())
+}
+
+/// 设置启动器背景色；立即广播给启动器窗口生效。
+#[tauri::command]
+fn set_background_color(
+    app: AppHandle,
+    state: State<'_, UiPrefs>,
+    color: String,
+) -> ApiResponse<String> {
+    let normalized = match normalize_color(&color) {
+        Some(c) => c,
+        None => return ApiResponse::err_message("颜色格式应为 #rgb 或 #rrggbb"),
+    };
+    *state.background_color.lock().unwrap() = normalized.clone();
+    save_ui_prefs(&state.path, &ui_prefs_data(&state));
+    let _ = app.emit("ui-background-changed", normalized.clone());
+    ApiResponse::ok(normalized)
 }
 
 fn show_launcher(app: &AppHandle) {
@@ -963,7 +1035,7 @@ fn main() {
 
             let hotkey_path = config_dir.join("hotkey.json");
             let ui_path = config_dir.join("ui.json");
-            let (ui_preset, ui_result_limit) = load_ui_prefs(&ui_path);
+            let ui_prefs_data = load_ui_prefs(&ui_path);
             let initial_size = {
                 let h = app.handle().clone();
                 let (mw, mh) = monitor_under_cursor(&h)
@@ -973,7 +1045,7 @@ fn main() {
                         (sz.width, sz.height)
                     })
                     .unwrap_or((1920.0, 1080.0));
-                crate::utils::window_size::compute(&ui_preset, mw, mh)
+                crate::utils::window_size::compute(&ui_prefs_data.preset, mw, mh)
             };
 
             // 管理保险库运行时（Mutex 保证 Send+Sync）
@@ -981,8 +1053,9 @@ fn main() {
             app.manage(LauncherFlags::default());
             app.manage(ClipboardGuard::default());
             app.manage(UiPrefs {
-                preset: Mutex::new(ui_preset),
-                result_limit: Mutex::new(ui_result_limit),
+                preset: Mutex::new(ui_prefs_data.preset),
+                result_limit: Mutex::new(ui_prefs_data.result_limit),
+                background_color: Mutex::new(ui_prefs_data.background_color),
                 path: ui_path,
             });
 
@@ -1150,6 +1223,7 @@ fn main() {
             get_ui_info,
             set_window_preset,
             set_result_limit,
+            set_background_color,
             hide_launcher,
             set_suppress_hide,
             get_hotkey,

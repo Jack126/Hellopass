@@ -57,7 +57,7 @@ impl KeyManager {
             salt: self.crypto_engine.get_salt().to_vec(),
         };
         let config_json = serde_json::to_string(&config)?;
-        fs::write(config_path, config_json)?;
+        crate::utils::secure_file::write_private(&config_path, config_json.as_bytes())?;
         Ok(())
     }
 

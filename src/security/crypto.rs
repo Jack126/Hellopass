@@ -7,13 +7,17 @@ use hmac::Hmac;
 use sha2::{Sha256, Digest};
 use rand::RngCore;
 use base64::Engine;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 use thiserror::Error;
 
 /// PBKDF2 迭代次数（OWASP 2023 对 PBKDF2-HMAC-SHA256 的建议下限为 600,000）。
 /// 该值仅用于「新建」保险库；已有保险库的迭代次数从其持久化配置读取，
 /// 因此提高此常量不会使旧数据无法解密。
 pub const DEFAULT_PBKDF2_ITERATIONS: u32 = 600_000;
+/// 导入/恢复时允许接受的最小迭代次数（低于此值视为 KDF 被降级）。
+pub const MIN_PBKDF2_ITERATIONS: u32 = 100_000;
+/// 导入/恢复时允许接受的最大迭代次数（防止用超大值拖死 CPU）。
+pub const MAX_PBKDF2_ITERATIONS: u32 = 5_000_000;
 /// 主密钥派生盐值长度
 const SALT_LEN: usize = 32;
 /// GCM 推荐 nonce 长度
@@ -29,6 +33,8 @@ pub enum CryptoError {
     DecryptionFailed,
     #[error("密钥派生失败")]
     KeyDerivationFailed,
+    #[error("KDF 迭代次数异常: {0}")]
+    InvalidIterations(u32),
     #[error("无效的密文")]
     InvalidCiphertext,
     #[error("数据损坏")]
@@ -42,8 +48,8 @@ pub enum CryptoError {
 /// 密文格式为 nonce(12) 拼接 ciphertext（ciphertext 内含 16 字节 GCM 标签）。
 #[derive(Clone)]
 pub struct SecureCryptoEngine {
-    /// 主加密密钥（32字节）
-    master_key: [u8; 32],
+    /// 主加密密钥（32字节），释放时自动清零
+    master_key: Zeroizing<[u8; 32]>,
     /// 密钥派生盐值（必须持久化，否则重启后无法恢复同一密钥解密历史数据）
     salt: [u8; SALT_LEN],
     /// 派生该密钥所用的 PBKDF2 迭代次数（持久化于配置，重启后按原值恢复）
@@ -70,8 +76,8 @@ impl SecureCryptoEngine {
         }
 
         let iterations = DEFAULT_PBKDF2_ITERATIONS;
-        let mut master_key = [0u8; 32];
-        pbkdf2::<Hmac<Sha256>>(password.as_bytes(), &salt_value, iterations, &mut master_key);
+        let mut master_key = Zeroizing::new([0u8; 32]);
+        pbkdf2::<Hmac<Sha256>>(password.as_bytes(), &salt_value, iterations, &mut master_key[..]);
 
         Ok(Self { master_key, salt: salt_value, iterations })
     }
@@ -87,6 +93,9 @@ impl SecureCryptoEngine {
         salt: Option<&[u8]>,
         iterations: u32,
     ) -> Result<Self, CryptoError> {
+        if !(MIN_PBKDF2_ITERATIONS..=MAX_PBKDF2_ITERATIONS).contains(&iterations) {
+            return Err(CryptoError::InvalidIterations(iterations));
+        }
         let mut salt_value = [0u8; SALT_LEN];
         match salt {
             Some(s) => {
@@ -100,8 +109,8 @@ impl SecureCryptoEngine {
             }
         }
 
-        let mut master_key = [0u8; 32];
-        pbkdf2::<Hmac<Sha256>>(password.as_bytes(), &salt_value, iterations, &mut master_key);
+        let mut master_key = Zeroizing::new([0u8; 32]);
+        pbkdf2::<Hmac<Sha256>>(password.as_bytes(), &salt_value, iterations, &mut master_key[..]);
 
         Ok(Self {
             master_key,
@@ -119,7 +128,7 @@ impl SecureCryptoEngine {
     ///
     /// 返回 nonce 拼接 ciphertext（ciphertext 内含 GCM 认证标签）。
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = GenericArray::from_slice(&self.master_key);
+        let key = GenericArray::from_slice(&self.master_key[..]);
         let cipher = Aes256Gcm::new(key);
 
         let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -146,7 +155,7 @@ impl SecureCryptoEngine {
         }
 
         let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_LEN);
-        let key = GenericArray::from_slice(&self.master_key);
+        let key = GenericArray::from_slice(&self.master_key[..]);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(nonce_bytes);
 
@@ -185,7 +194,7 @@ impl SecureCryptoEngine {
 /// （salt 不是秘密，但一起清掉没有副作用。）
 impl Drop for SecureCryptoEngine {
     fn drop(&mut self) {
-        self.master_key.zeroize();
+        // master_key 由 Zeroizing 自动清零，这里只需处理非敏感但可一并清掉的 salt
         self.salt.zeroize();
     }
 }

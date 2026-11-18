@@ -361,6 +361,52 @@ impl Database {
             backup_count,
         })
     }
+
+    /// 受保护内容（passwords + password_history）的聚合哈希，用于完整性基线。
+    /// 刻意不包含 audit_logs：写审计不应让基线失效。
+    pub fn protected_content_hash(&self) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT CAST(id AS TEXT), site_name, site_url, username, encrypted_password, \
+                 COALESCE(encrypted_notes, ''), created_at, updated_at, COALESCE(tags, ''), \
+                 CAST(priority AS TEXT), COALESCE(metadata, ''), COALESCE(checksum, '') \
+                 FROM passwords ORDER BY id",
+            )
+            .ok()?;
+        let mut rows = stmt.query([]).ok()?;
+        while let Some(row) = rows.next().ok()? {
+            for i in 0..12 {
+                let value: String = row.get(i).ok()?;
+                hasher.update(value.as_bytes());
+                hasher.update(b"\x1f");
+            }
+            hasher.update(b"\x1e");
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT CAST(id AS TEXT), CAST(password_id AS TEXT), changed_at, \
+                 COALESCE(password_hash, ''), COALESCE(encrypted_password, '') \
+                 FROM password_history ORDER BY id",
+            )
+            .ok()?;
+        let mut rows = stmt.query([]).ok()?;
+        while let Some(row) = rows.next().ok()? {
+            for i in 0..5 {
+                let value: String = row.get(i).ok()?;
+                hasher.update(value.as_bytes());
+                hasher.update(b"\x1f");
+            }
+            hasher.update(b"\x1e");
+        }
+
+        Some(format!("{:x}", hasher.finalize()))
+    }
 }
 
 /// 数据库统计信息
