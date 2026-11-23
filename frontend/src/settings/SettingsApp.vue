@@ -287,7 +287,7 @@
       <section v-else class="pane">
         <div class="card">
           <h2>Hellopass</h2>
-          <p class="muted">版本 1.0.2</p>
+          <p class="muted">版本 1.0.3</p>
         </div>
       </section>
     </main>

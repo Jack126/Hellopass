@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS passwords (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     site_name TEXT NOT NULL,
     site_url TEXT NOT NULL,
-    username TEXT NOT NULL,
+    -- 用户名与密码一样，用主密钥 AES-256-GCM 加密存储（base64 密文）
+    encrypted_username TEXT,
     encrypted_password TEXT NOT NULL,
     encrypted_notes TEXT,
     created_at TEXT NOT NULL,
@@ -59,7 +60,6 @@ CREATE TABLE IF NOT EXISTS password_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_passwords_site ON passwords(site_name);
-CREATE INDEX IF NOT EXISTS idx_passwords_username ON passwords(username);
 CREATE INDEX IF NOT EXISTS idx_passwords_tags ON passwords(tags);
 CREATE INDEX IF NOT EXISTS idx_passwords_created_at ON passwords(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);

@@ -1,6 +1,6 @@
 [package]
 name = "hellopass"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 default-run = "hellopass"
 license = "BSD-3-Clause"

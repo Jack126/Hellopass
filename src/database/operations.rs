@@ -39,7 +39,7 @@ struct RawRow {
     id: i64,
     site_name: String,
     site_url: String,
-    username: String,
+    encrypted_username: Option<String>,
     encrypted_password: String,
     encrypted_notes: Option<String>,
     created_at: String,
@@ -109,9 +109,65 @@ impl PasswordOperations {
             .map_err(|_| OperationError::DecryptError)
     }
 
+    /// 旧库迁移：把明文 `username` 列加密写入 `encrypted_username`，完成后删除遗留列。
+    ///
+    /// 必须在解锁/建库拿到主密钥后调用。加密逐行进行，中途失败下次继续；
+    /// 只有所有行都已加密才会 DROP 遗留列，避免明文与密文并存时丢数据。
+    pub fn migrate_legacy_usernames(&self) -> Result<(), OperationError> {
+        let has_legacy = self
+            .database
+            .has_column("passwords", "username")
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        if !has_legacy {
+            return Ok(());
+        }
+
+        let pending: Vec<(i64, String)> = {
+            let mut stmt = self
+                .conn()
+                .prepare("SELECT id, username FROM passwords WHERE encrypted_username IS NULL")
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+            let mapped = stmt
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<(i64, String)>>>()
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+            mapped
+        };
+
+        for (id, plain) in pending {
+            let enc = self.encrypt_to_b64(&plain)?;
+            self.conn()
+                .execute(
+                    "UPDATE passwords SET encrypted_username=?1 WHERE id=?2",
+                    rusqlite::params![enc, id],
+                )
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        }
+
+        let remaining: i64 = self
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM passwords WHERE encrypted_username IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        if remaining == 0 {
+            let _ = self
+                .conn()
+                .execute("DROP INDEX IF EXISTS idx_passwords_username", []);
+            self.conn()
+                .execute("ALTER TABLE passwords DROP COLUMN username", [])
+                .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// 添加密码
     pub fn add_password(&self, password: NewPassword) -> Result<PasswordEntry, OperationError> {
         let now = Utc::now().to_rfc3339();
+        let enc_user = self.encrypt_to_b64(&password.username)?;
         let enc_pwd = self.encrypt_to_b64(&password.password)?;
         let enc_notes = match &password.notes {
             Some(n) => Some(self.encrypt_to_b64(n)?),
@@ -121,11 +177,11 @@ impl PasswordOperations {
         let priority = password.priority.unwrap_or(0);
 
         let id = self.conn().execute(
-            "INSERT INTO passwords              (site_name, site_url, username, encrypted_password, encrypted_notes, created_at, updated_at, access_count, tags, priority)              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
+            "INSERT INTO passwords              (site_name, site_url, encrypted_username, encrypted_password, encrypted_notes, created_at, updated_at, access_count, tags, priority)              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
             rusqlite::params![
                 password.site_name,
                 password.site_url,
-                password.username,
+                enc_user,
                 enc_pwd,
                 enc_notes,
                 now,
@@ -151,7 +207,7 @@ impl PasswordOperations {
     /// 获取所有密码（解密后返回明文）
     pub fn get_passwords(&self) -> Result<Vec<PasswordEntry>, OperationError> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords ORDER BY created_at DESC",
+            "SELECT id, site_name, site_url, encrypted_username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords ORDER BY created_at DESC",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
@@ -163,12 +219,12 @@ impl PasswordOperations {
         rows.into_iter().map(|r| self.raw_to_entry(r)).collect()
     }
 
-    /// 列出检索用摘要：只读元数据，不解密任何字段。
+    /// 列出检索用摘要：解密用户名用于展示与拼音检索，但不返回任何密码/备注。
     pub fn list_summaries(&self) -> Result<Vec<EntrySummary>, OperationError> {
         let mut stmt = self
             .conn()
             .prepare(
-                "SELECT id, site_name, site_url, username, tags, updated_at, last_accessed, access_count              FROM passwords              ORDER BY COALESCE(last_accessed, updated_at) DESC",
+                "SELECT id, site_name, site_url, encrypted_username, tags, updated_at, last_accessed, access_count              FROM passwords              ORDER BY COALESCE(last_accessed, updated_at) DESC",
             )
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
@@ -181,32 +237,47 @@ impl PasswordOperations {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .collect();
-                let site_name: String = row.get("site_name")?;
-                let username: String = row.get("username")?;
+                Ok((
+                    row.get::<_, i64>("id")?,
+                    row.get::<_, String>("site_name")?,
+                    row.get::<_, String>("site_url")?,
+                    row.get::<_, Option<String>>("encrypted_username")?,
+                    tags,
+                    row.get::<_, String>("updated_at")?,
+                    row.get::<_, Option<String>>("last_accessed")?,
+                    row.get::<_, i32>("access_count")?,
+                ))
+            })
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+
+        rows.into_iter()
+            .map(|(id, site_name, site_url, enc_username, tags, updated_at, last_accessed, access_count)| {
+                let username = match enc_username.as_deref() {
+                    Some(b64) => self.decrypt_from_b64(b64)?.to_string(),
+                    None => String::new(),
+                };
                 let initials_src = format!("{} {} {}", site_name, username, tags.join(" "));
                 Ok(EntrySummary {
-                    id: row.get("id")?,
+                    id,
                     site_name,
-                    site_url: row.get("site_url")?,
+                    site_url,
                     username,
                     tags,
-                    updated_at: row.get("updated_at")?,
-                    last_accessed: row.get("last_accessed")?,
-                    access_count: row.get("access_count")?,
+                    updated_at,
+                    last_accessed,
+                    access_count,
                     pinyin_initials: crate::utils::pinyin::initials(&initials_src),
                 })
             })
-            .map_err(|e| OperationError::DatabaseError(e.to_string()))?
-            .collect::<rusqlite::Result<Vec<EntrySummary>>>()
-            .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
-
-        Ok(rows)
+            .collect()
     }
 
     /// 按 id 获取单条
     pub fn get_password(&self, id: i64) -> Result<PasswordEntry, OperationError> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords WHERE id = ?1",
+            "SELECT id, site_name, site_url, encrypted_username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords WHERE id = ?1",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         let row = stmt
@@ -219,20 +290,31 @@ impl PasswordOperations {
         self.raw_to_entry(row)
     }
 
-    /// 搜索密码（按站点名/用户名/标签模糊匹配）
+    /// 搜索密码（按站点名/用户名/标签模糊匹配）。
+    /// 用户名为密文，无法再用 SQL LIKE，因此改为读取后解密再在内存中过滤。
     pub fn search_passwords(&self, query: &str) -> Result<Vec<PasswordEntry>, OperationError> {
-        let like = format!("%{}%", query);
         let mut stmt = self.conn().prepare(
-            "SELECT id, site_name, site_url, username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords              WHERE site_name LIKE ?1 OR username LIKE ?1 OR tags LIKE ?1              ORDER BY created_at DESC",
+            "SELECT id, site_name, site_url, encrypted_username, encrypted_password, encrypted_notes,              created_at, updated_at, last_accessed, access_count, tags, priority, metadata, checksum              FROM passwords ORDER BY created_at DESC",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
-            .query_map(rusqlite::params![like], Self::map_row)
+            .query_map([], Self::map_row)
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?
             .collect::<rusqlite::Result<Vec<RawRow>>>()
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
-        rows.into_iter().map(|r| self.raw_to_entry(r)).collect()
+        let needle = query.trim().to_lowercase();
+        let mut out = Vec::new();
+        for r in rows {
+            let entry = self.raw_to_entry(r)?;
+            let hit = entry.site_name.to_lowercase().contains(&needle)
+                || entry.username.to_lowercase().contains(&needle)
+                || entry.tags.iter().any(|t| t.to_lowercase().contains(&needle));
+            if hit {
+                out.push(entry);
+            }
+        }
+        Ok(out)
     }
 
     /// 更新密码（仅更新提供的字段）
@@ -262,6 +344,7 @@ impl PasswordOperations {
         });
         let notes_plain = p.notes.or(current.notes);
 
+        let enc_user = self.encrypt_to_b64(&username)?;
         let enc_pwd = self.encrypt_to_b64(password_plain.as_str())?;
         let enc_notes = match notes_plain {
             Some(n) => Some(self.encrypt_to_b64(&n)?),
@@ -271,9 +354,9 @@ impl PasswordOperations {
         let tags_str = tags.join(",");
 
         self.conn().execute(
-            "UPDATE passwords SET site_name=?1, site_url=?2, username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, priority=?8 WHERE id=?9",
+            "UPDATE passwords SET site_name=?1, site_url=?2, encrypted_username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, priority=?8 WHERE id=?9",
             rusqlite::params![
-                site_name, site_url, username, enc_pwd, enc_notes, now, tags_str, priority, p.id
+                site_name, site_url, enc_user, enc_pwd, enc_notes, now, tags_str, priority, p.id
             ],
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
@@ -298,6 +381,7 @@ impl PasswordOperations {
         let tags = p.tags.unwrap_or(current.tags);
         let notes_plain = p.notes.or(current.notes);
 
+        let enc_user = self.encrypt_to_b64(&username)?;
         let enc_pwd = self.encrypt_to_b64(&p.password)?;
         let enc_notes = match notes_plain {
             Some(n) => Some(self.encrypt_to_b64(&n)?),
@@ -308,11 +392,11 @@ impl PasswordOperations {
         let affected = self
             .conn()
             .execute(
-                "UPDATE passwords SET site_name=?1, site_url=?2, username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, priority=?8 WHERE id=?9",
+                "UPDATE passwords SET site_name=?1, site_url=?2, encrypted_username=?3, encrypted_password=?4,              encrypted_notes=?5, updated_at=?6, tags=?7, priority=?8 WHERE id=?9",
                 rusqlite::params![
                     site_name,
                     site_url,
-                    username,
+                    enc_user,
                     enc_pwd,
                     enc_notes,
                     now,
@@ -564,20 +648,24 @@ impl PasswordOperations {
 }
 
     /// 读取全部条目的密文（不解密），用于主密码更换时的重加密。
-    pub fn get_encrypted_rows(&self) -> Result<Vec<(i64, String, Option<String>)>, OperationError> {
+    /// 返回 (id, 加密用户名, 加密密码, 加密备注)。
+    pub fn get_encrypted_rows(
+        &self,
+    ) -> Result<Vec<(i64, Option<String>, String, Option<String>)>, OperationError> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, encrypted_password, encrypted_notes FROM passwords",
+            "SELECT id, encrypted_username, encrypted_password, encrypted_notes FROM passwords",
         ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((
                     r.get::<_, i64>("id")?,
+                    r.get::<_, Option<String>>("encrypted_username")?,
                     r.get::<_, String>("encrypted_password")?,
                     r.get::<_, Option<String>>("encrypted_notes")?,
                 ))
             })
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?
-            .collect::<rusqlite::Result<Vec<(i64, String, Option<String>)>>>()
+            .collect::<rusqlite::Result<Vec<(i64, Option<String>, String, Option<String>)>>>()
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         Ok(rows)
     }
@@ -592,7 +680,26 @@ impl PasswordOperations {
             .unchecked_transaction()
             .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
 
-        for (id, enc_pwd, enc_notes) in self.get_encrypted_rows()? {
+        for (id, enc_user, enc_pwd, enc_notes) in self.get_encrypted_rows()? {
+            let new_enc_user = match enc_user {
+                Some(e) => {
+                    let ct = base64::engine::general_purpose::STANDARD
+                        .decode(&e)
+                        .map_err(|_| OperationError::DecryptError)?;
+                    let p = Zeroizing::new(
+                        old_crypto
+                            .decrypt(&ct)
+                            .map_err(|_| OperationError::DecryptError)?,
+                    );
+                    let n = self
+                        .crypto
+                        .encrypt(p.as_slice())
+                        .map_err(|e| OperationError::DatabaseError(e.to_string()))?;
+                    Some(base64::engine::general_purpose::STANDARD.encode(n))
+                }
+                None => None,
+            };
+
             let old_ct = base64::engine::general_purpose::STANDARD
                 .decode(&enc_pwd)
                 .map_err(|_| OperationError::DecryptError)?;
@@ -627,8 +734,8 @@ impl PasswordOperations {
             };
 
             tx.execute(
-                "UPDATE passwords SET encrypted_password=?1, encrypted_notes=?2 WHERE id=?3",
-                rusqlite::params![new_enc, new_enc_notes, id],
+                "UPDATE passwords SET encrypted_username=?1, encrypted_password=?2, encrypted_notes=?3 WHERE id=?4",
+                rusqlite::params![new_enc_user, new_enc, new_enc_notes, id],
             ).map_err(|e| OperationError::DatabaseError(e.to_string()))?;
         }
 
@@ -680,7 +787,7 @@ impl PasswordOperations {
             id: row.get("id")?,
             site_name: row.get("site_name")?,
             site_url: row.get("site_url")?,
-            username: row.get("username")?,
+            encrypted_username: row.get("encrypted_username")?,
             encrypted_password: row.get("encrypted_password")?,
             encrypted_notes: row.get("encrypted_notes")?,
             created_at: row.get("created_at")?,
@@ -696,6 +803,10 @@ impl PasswordOperations {
 
     fn raw_to_entry(&self, r: RawRow) -> Result<PasswordEntry, OperationError> {
         // DTO 需要 String，这里只能复制一份；临时缓冲区本身由 Zeroizing 负责清零
+        let username = match r.encrypted_username.as_deref() {
+            Some(b64) => self.decrypt_from_b64(b64)?.to_string(),
+            None => String::new(),
+        };
         let password = self.decrypt_from_b64(&r.encrypted_password)?.to_string();
         let notes = match r.encrypted_notes {
             Some(ref e) => Some(self.decrypt_from_b64(e)?.to_string()),
@@ -712,7 +823,7 @@ impl PasswordOperations {
             id: Some(r.id),
             site_name: r.site_name,
             site_url: r.site_url,
-            username: r.username,
+            username,
             encrypted_password: r.encrypted_password,
             encrypted_notes: r.encrypted_notes,
             created_at: r.created_at,
@@ -806,6 +917,93 @@ mod tests {
         ops.delete_password(added.id.unwrap()).expect("delete");
         let after = ops.get_passwords().expect("get after delete");
         assert_eq!(after.len(), 0);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn username_encrypted_at_rest_and_searchable() {
+        let (db_path, config_dir) = tmp();
+        let mut mgr = MasterPasswordManager::new(config_dir.to_str().unwrap());
+        mgr.set_master_password("StrongPass123!").expect("set master password");
+        let database = Database::new(&db_path).expect("open db");
+        let crypto = mgr.get_crypto_engine().expect("crypto engine").clone();
+        let ops = PasswordOperations::new(database, crypto);
+
+        let added = ops.add_password(NewPassword {
+            site_name: "example.com".into(),
+            site_url: "https://example.com".into(),
+            username: "alice@example.com".into(),
+            password: "super-secret".into(),
+            notes: None,
+            tags: Some(vec!["work".into()]),
+            priority: None,
+        }).expect("add");
+        let id = added.id.unwrap();
+
+        // 库里必须是密文，不能出现明文用户名
+        let raw: String = ops
+            .conn()
+            .query_row(
+                "SELECT encrypted_username FROM passwords WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .expect("encrypted_username");
+        assert_ne!(raw, "alice@example.com", "用户名不能以明文入库");
+        assert!(!raw.is_empty());
+
+        // 读取时解密回明文（前端所见）
+        assert_eq!(ops.get_password(id).expect("get").username, "alice@example.com");
+        // 摘要同样解密用户名，且可用于拼音检索
+        let summaries = ops.list_summaries().expect("summaries");
+        assert_eq!(summaries[0].username, "alice@example.com");
+        // 按用户名搜索（密文无法走 SQL LIKE，改为内存过滤）
+        let found = ops.search_passwords("alice").expect("search");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].username, "alice@example.com");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn legacy_plaintext_username_is_migrated() {
+        let (db_path, config_dir) = tmp();
+        let mut mgr = MasterPasswordManager::new(config_dir.to_str().unwrap());
+        mgr.set_master_password("StrongPass123!").expect("set master password");
+        let crypto = mgr.get_crypto_engine().expect("crypto engine").clone();
+
+        // 手工构造旧库：只有明文 username 列
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("create legacy db");
+            conn.execute(
+                "CREATE TABLE passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, site_name TEXT NOT NULL, \
+                 site_url TEXT NOT NULL, username TEXT NOT NULL, encrypted_password TEXT NOT NULL, \
+                 encrypted_notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                [],
+            ).expect("legacy schema");
+            let ct = crypto.encrypt(b"legacy-pass").expect("enc");
+            let enc_pwd = base64::engine::general_purpose::STANDARD.encode(ct);
+            conn.execute(
+                "INSERT INTO passwords (site_name, site_url, username, encrypted_password, created_at, updated_at) \
+                 VALUES ('example.com', 'https://example.com', 'legacy-user', ?1, 't', 't')",
+                rusqlite::params![enc_pwd],
+            ).expect("insert legacy row");
+        }
+
+        // 正常打开：补齐 encrypted_username 列；随后用主密钥迁移
+        let database = Database::new(&db_path).expect("open db");
+        assert!(database.has_column("passwords", "username").expect("has legacy"));
+        let ops = PasswordOperations::new(database, crypto);
+        ops.migrate_legacy_usernames().expect("migrate");
+
+        // 遗留明文列已被删除，用户名可正常解密
+        assert!(!ops.database.has_column("passwords", "username").expect("legacy dropped"));
+        let entry = ops.get_password(1).expect("get migrated");
+        assert_eq!(entry.username, "legacy-user");
+        assert_eq!(entry.password.as_deref(), Some("legacy-pass"));
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir_all(&config_dir);

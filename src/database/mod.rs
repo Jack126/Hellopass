@@ -52,7 +52,7 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 site_name TEXT NOT NULL,
                 site_url TEXT NOT NULL,
-                username TEXT NOT NULL,
+                encrypted_username TEXT,
                 encrypted_password TEXT NOT NULL,
                 encrypted_notes TEXT,
                 created_at TEXT NOT NULL,
@@ -154,7 +154,7 @@ impl Database {
         Self::create_indexes(conn)?;
 
         // 记录 schema 版本
-        Self::set_schema_version(conn, 4)?;
+        Self::set_schema_version(conn, 5)?;
 
         Ok(())
     }
@@ -162,6 +162,9 @@ impl Database {
     /// 旧库迁移：确保关键列存在（CREATE TABLE IF NOT EXISTS 不会补列）。
     fn migrate_columns(conn: &Connection) -> Result<(), DatabaseError> {
         let password_cols = [
+            // v5：用户名改为「主密钥加密」存储（与密码一致）。旧库的明文 username 列
+            // 由 PasswordOperations::migrate_legacy_usernames 在解锁后加密并删除。
+            ("encrypted_username", "encrypted_username TEXT"),
             ("last_accessed", "last_accessed TEXT"),
             ("access_count", "access_count INTEGER DEFAULT 0"),
             ("tags", "tags TEXT"),
@@ -252,10 +255,8 @@ impl Database {
             [],
         )?;
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_passwords_username ON passwords(username)",
-            [],
-        )?;
+        // 用户名改为加密存储后，明文索引已无意义；旧库的该索引直接删除。
+        conn.execute("DROP INDEX IF EXISTS idx_passwords_username", [])?;
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_passwords_tags ON passwords(tags)",
@@ -288,6 +289,16 @@ impl Database {
     /// 获取数据库连接（只读借用）
     pub fn get_connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// 判断指定表是否已存在某列（用于旧库迁移判断）。
+    pub fn has_column(&self, table: &str, column: &str) -> Result<bool, DatabaseError> {
+        let exists: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+            rusqlite::params![table, column],
+            |r| r.get::<_, i64>(0),
+        )? > 0;
+        Ok(exists)
     }
 
     /// 执行数据库事务
@@ -371,10 +382,10 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT CAST(id AS TEXT), site_name, site_url, username, encrypted_password, \
-                 COALESCE(encrypted_notes, ''), created_at, updated_at, COALESCE(tags, ''), \
-                 CAST(priority AS TEXT), COALESCE(metadata, ''), COALESCE(checksum, '') \
-                 FROM passwords ORDER BY id",
+                "SELECT CAST(id AS TEXT), site_name, site_url, COALESCE(encrypted_username, ''), \
+                 encrypted_password, COALESCE(encrypted_notes, ''), created_at, updated_at, \
+                 COALESCE(tags, ''), CAST(priority AS TEXT), COALESCE(metadata, ''), \
+                 COALESCE(checksum, '') FROM passwords ORDER BY id",
             )
             .ok()?;
         let mut rows = stmt.query([]).ok()?;
@@ -472,7 +483,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_category, 0, "v4 迁移应删除 category 列");
-        assert_eq!(db.schema_version().unwrap(), 4);
+        assert_eq!(db.schema_version().unwrap(), 5);
 
         let _ = std::fs::remove_file(&db_path);
     }

@@ -136,7 +136,10 @@ impl VaultRuntime {
         mgr.set_master_password(master_password)?;
         let crypto = mgr.get_crypto_engine()?.clone();
         let database = Database::new(&self.db_path)?;
-        self.vault = Some(PasswordOperations::new(database, crypto));
+        let vault = PasswordOperations::new(database, crypto);
+        // 旧库可能存有明文用户名，解锁/建库后立即加密并删除遗留列
+        vault.migrate_legacy_usernames()?;
+        self.vault = Some(vault);
         self.clear_lockout_state();
         Ok(())
     }
@@ -203,7 +206,12 @@ impl VaultRuntime {
                 self.failed_attempts = 0;
                 self.lockout_until = None;
                 self.clear_lockout_state();
-                self.vault = Some(PasswordOperations::new(db, crypto));
+                let vault = PasswordOperations::new(db, crypto);
+                // 旧库可能存有明文用户名，解锁后立即加密并删除遗留列
+                if let Err(e) = vault.migrate_legacy_usernames() {
+                    return ApiResponse::err_message(format!("用户名迁移失败: {}", e));
+                }
+                self.vault = Some(vault);
                 self.last_activity = Some(Utc::now());
                 // 解锁成功后按保留策略清理过期/超量审计日志（best-effort）
                 if let Some(v) = &self.vault {
@@ -1271,11 +1279,61 @@ mod tests {
         // 数据仍可被新密钥正确解密
         let got = rt_new.get_password(id);
         assert!(got.success);
-        assert_eq!(got.data.unwrap().password.as_deref(), Some("secret-value"));
+        let entry = got.data.unwrap();
+        assert_eq!(entry.password.as_deref(), Some("secret-value"));
+        assert_eq!(entry.username, "bob", "rekey 后用户名应仍能解密");
 
         // 删除
         assert!(rt_new.delete_password(id).success);
         assert_eq!(rt_new.get_passwords().data.unwrap().len(), 0);
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn unlock_migrates_legacy_plaintext_username() {
+        let (db, cfg) = tmp();
+        let mut mgr = MasterPasswordManager::new(cfg.to_str().unwrap());
+        mgr.set_master_password("StrongPass123!").expect("set");
+        let crypto = mgr.get_crypto_engine().expect("crypto").clone();
+
+        // 构造旧库：明文 username 列 + 合法加密密码
+        {
+            let conn = rusqlite::Connection::open(&db).expect("legacy db");
+            conn.execute(
+                "CREATE TABLE passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, site_name TEXT NOT NULL, \
+                 site_url TEXT NOT NULL, username TEXT NOT NULL, encrypted_password TEXT NOT NULL, \
+                 encrypted_notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                [],
+            ).expect("legacy schema");
+            let enc_pwd = base64::engine::general_purpose::STANDARD
+                .encode(crypto.encrypt(b"legacy-pass").expect("enc"));
+            conn.execute(
+                "INSERT INTO passwords (site_name, site_url, username, encrypted_password, created_at, updated_at) \
+                 VALUES ('example.com', 'https://example.com', 'legacy-user', ?1, 't', 't')",
+                rusqlite::params![enc_pwd],
+            ).expect("insert");
+        }
+
+        // 真实解锁路径：应自动完成用户名加密迁移
+        let mut rt = VaultRuntime::new(cfg.clone(), db.clone());
+        let unlock = rt.unlock("StrongPass123!");
+        assert!(unlock.success, "unlock 失败: {:?}", unlock.error);
+        let entries = rt.get_passwords();
+        assert!(entries.success, "get_passwords: {:?}", entries.error);
+        assert_eq!(entries.data.as_ref().unwrap()[0].username, "legacy-user");
+
+        // 遗留明文列已删除
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let still_plain: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = 'username'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_plain, 0, "迁移后不应再保留明文 username 列");
 
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
