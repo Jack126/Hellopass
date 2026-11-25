@@ -50,7 +50,8 @@ impl Database {
             r#"
             CREATE TABLE IF NOT EXISTS passwords (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                site_name TEXT NOT NULL,
+                -- 站点名与用户名一样，用主密钥 AES-256-GCM 加密存储（base64 密文）
+                encrypted_site_name TEXT,
                 site_url TEXT NOT NULL,
                 encrypted_username TEXT,
                 encrypted_password TEXT NOT NULL,
@@ -154,7 +155,7 @@ impl Database {
         Self::create_indexes(conn)?;
 
         // 记录 schema 版本
-        Self::set_schema_version(conn, 5)?;
+        Self::set_schema_version(conn, 6)?;
 
         Ok(())
     }
@@ -162,6 +163,9 @@ impl Database {
     /// 旧库迁移：确保关键列存在（CREATE TABLE IF NOT EXISTS 不会补列）。
     fn migrate_columns(conn: &Connection) -> Result<(), DatabaseError> {
         let password_cols = [
+            // v6：站点名改为「主密钥加密」存储。旧库的明文 site_name 列
+            // 由 PasswordOperations::migrate_legacy_site_names 在解锁后加密并删除。
+            ("encrypted_site_name", "encrypted_site_name TEXT"),
             // v5：用户名改为「主密钥加密」存储（与密码一致）。旧库的明文 username 列
             // 由 PasswordOperations::migrate_legacy_usernames 在解锁后加密并删除。
             ("encrypted_username", "encrypted_username TEXT"),
@@ -250,12 +254,8 @@ impl Database {
 
     /// 创建数据库索引
     fn create_indexes(conn: &Connection) -> Result<(), DatabaseError> {
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_passwords_site ON passwords(site_name)",
-            [],
-        )?;
-
-        // 用户名改为加密存储后，明文索引已无意义；旧库的该索引直接删除。
+        // 站点名/用户名改为加密存储后，明文索引已无意义；旧库的索引直接删除。
+        conn.execute("DROP INDEX IF EXISTS idx_passwords_site", [])?;
         conn.execute("DROP INDEX IF EXISTS idx_passwords_username", [])?;
 
         conn.execute(
@@ -382,8 +382,9 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT CAST(id AS TEXT), site_name, site_url, COALESCE(encrypted_username, ''), \
-                 encrypted_password, COALESCE(encrypted_notes, ''), created_at, updated_at, \
+                "SELECT CAST(id AS TEXT), COALESCE(encrypted_site_name, ''), site_url, \
+                 COALESCE(encrypted_username, ''), encrypted_password, \
+                 COALESCE(encrypted_notes, ''), created_at, updated_at, \
                  COALESCE(tags, ''), CAST(priority AS TEXT), COALESCE(metadata, ''), \
                  COALESCE(checksum, '') FROM passwords ORDER BY id",
             )
@@ -483,7 +484,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_category, 0, "v4 迁移应删除 category 列");
-        assert_eq!(db.schema_version().unwrap(), 5);
+        let has_encrypted_site: i64 = db
+            .get_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = 'encrypted_site_name'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_encrypted_site, 1, "v6 迁移应补齐 encrypted_site_name 列");
+        assert_eq!(db.schema_version().unwrap(), 6);
 
         let _ = std::fs::remove_file(&db_path);
     }

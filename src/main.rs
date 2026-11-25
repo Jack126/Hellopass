@@ -112,11 +112,76 @@ fn seed_demo(args: &[String]) {
     println!("主密码: {}", password);
 }
 
+/// 旧库维护：解锁一次以触发「站点名/用户名加密」迁移，随后立即锁定。
+/// 用法：HELLPASS_MASTER_PASSWORD=<主密码> hellopass_cli migrate <db> <config_dir>
+/// 主密码只从环境变量读取，避免出现在命令行参数/进程列表里。
+fn migrate_legacy(args: &[String]) {
+    if args.len() < 4 {
+        eprintln!("用法: HELLPASS_MASTER_PASSWORD=<主密码> hellopass_cli migrate <db> <config_dir>");
+        std::process::exit(2);
+    }
+    let db = PathBuf::from(&args[2]);
+    let cfg = PathBuf::from(&args[3]);
+    let password = match std::env::var("HELLPASS_MASTER_PASSWORD") {
+        Ok(p) if !p.is_empty() => p,
+        _ => {
+            eprintln!("请通过环境变量 HELLPASS_MASTER_PASSWORD 提供主密码");
+            std::process::exit(2);
+        }
+    };
+
+    let mut rt = VaultRuntime::new(cfg, db.clone());
+    if !rt.is_set() {
+        eprintln!("该目录尚未设置主密码，无需迁移");
+        std::process::exit(1);
+    }
+    let res = rt.unlock(&password);
+    if !res.success {
+        eprintln!("解锁失败: {}", res.error.unwrap_or_default());
+        std::process::exit(1);
+    }
+    rt.lock();
+
+    // 复核：明文列应已删除、所有行都有密文站点名。
+    match rusqlite::Connection::open(&db) {
+        Ok(conn) => {
+            let plain_col: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = 'site_name'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(-1);
+            let missing: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM passwords WHERE encrypted_site_name IS NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(-1);
+            if plain_col == 0 && missing == 0 {
+                println!("迁移完成：site_name 已全部加密，明文列已删除。");
+            } else {
+                eprintln!("迁移未完成：明文列残留 {} 个，未加密行 {} 条。", plain_col, missing);
+                std::process::exit(1);
+            }
+        }
+        Err(e) => eprintln!("复核数据库失败: {}", e),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(|s| s.as_str()) == Some("seed-demo") {
-        seed_demo(&args);
-        return;
+    match args.get(1).map(|s| s.as_str()) {
+        Some("seed-demo") => {
+            seed_demo(&args);
+            return;
+        }
+        Some("migrate") => {
+            migrate_legacy(&args);
+            return;
+        }
+        _ => {}
     }
 
     println!("Hellopass - 密码管理器");

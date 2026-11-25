@@ -137,7 +137,8 @@ impl VaultRuntime {
         let crypto = mgr.get_crypto_engine()?.clone();
         let database = Database::new(&self.db_path)?;
         let vault = PasswordOperations::new(database, crypto);
-        // 旧库可能存有明文用户名，解锁/建库后立即加密并删除遗留列
+        // 旧库可能存有明文站点名/用户名，建库后立即加密并删除遗留列
+        vault.migrate_legacy_site_names()?;
         vault.migrate_legacy_usernames()?;
         self.vault = Some(vault);
         self.clear_lockout_state();
@@ -207,7 +208,10 @@ impl VaultRuntime {
                 self.lockout_until = None;
                 self.clear_lockout_state();
                 let vault = PasswordOperations::new(db, crypto);
-                // 旧库可能存有明文用户名，解锁后立即加密并删除遗留列
+                // 旧库可能存有明文站点名/用户名，解锁后立即加密并删除遗留列
+                if let Err(e) = vault.migrate_legacy_site_names() {
+                    return ApiResponse::err_message(format!("站点名迁移失败: {}", e));
+                }
                 if let Err(e) = vault.migrate_legacy_usernames() {
                     return ApiResponse::err_message(format!("用户名迁移失败: {}", e));
                 }
@@ -1126,15 +1130,17 @@ fn apply_import(vault: &PasswordOperations, items: Vec<NewPassword>) -> Result<I
         error_count: 0,
         errors: Vec::new(),
     };
-    let existing = vault.get_passwords().unwrap_or_default();
+    // 名称已加密，无法用 SQL 等值查询判重。这里只取摘要（仅解密站点名/用户名），
+    // 在内存里按归一化身份建索引；避免为了判重解密所有密码。
+    let existing = vault
+        .list_summaries()
+        .map_err(|e| format!("读取现有条目失败：{}", e))?;
     let mut index: HashMap<(String, String, String), i64> = HashMap::new();
     for e in &existing {
-        if let Some(id) = e.id {
-            index.insert(
-                crate::utils::identity::entry_identity(&e.site_url, &e.site_name, &e.username),
-                id,
-            );
-        }
+        index.insert(
+            crate::utils::identity::entry_identity(&e.site_url, &e.site_name, &e.username),
+            e.id,
+        );
     }
     for np in items {
         // 空密码多半是源文件缺少 password 字段，写入会覆盖掉可用密码，直接跳过。
@@ -1322,18 +1328,21 @@ mod tests {
         assert!(unlock.success, "unlock 失败: {:?}", unlock.error);
         let entries = rt.get_passwords();
         assert!(entries.success, "get_passwords: {:?}", entries.error);
+        assert_eq!(entries.data.as_ref().unwrap()[0].site_name, "example.com");
         assert_eq!(entries.data.as_ref().unwrap()[0].username, "legacy-user");
 
         // 遗留明文列已删除
         let conn = rusqlite::Connection::open(&db).unwrap();
-        let still_plain: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = 'username'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(still_plain, 0, "迁移后不应再保留明文 username 列");
+        for legacy_col in ["username", "site_name"] {
+            let still_plain: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = '{}'", legacy_col),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(still_plain, 0, "迁移后不应再保留明文 {} 列", legacy_col);
+        }
 
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
@@ -1951,6 +1960,21 @@ mod tests {
         // 导入未提供的备注/标签沿用原值
         assert_eq!(entries[0].notes.as_deref(), Some("旧备注"));
         assert_eq!(entries[0].tags, vec!["work".to_string()]);
+        // CSV 导入同样先加密再落库：不得出现明文站点名或明文列
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let enc_site: String = conn
+            .query_row("SELECT encrypted_site_name FROM passwords", [], |r| r.get(0))
+            .unwrap();
+        assert_ne!(enc_site, "Example", "站点名不能以明文入库");
+        assert!(!enc_site.is_empty());
+        let plain_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('passwords') WHERE name = 'site_name'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(plain_col, 0, "不应存在明文 site_name 列");
         let _ = std::fs::remove_file(&db);
         let _ = std::fs::remove_dir_all(&cfg);
     }

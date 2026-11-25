@@ -16,9 +16,9 @@ For quick usage, security parameters, screenshots, and planned items, see
     └── hotkey.json                           # hotkey bindings
 ```
 
-The database file is stored with `0600` permissions. Site names and URLs are
-stored in plaintext; **usernames, passwords and notes are encrypted** (usernames
-are decrypted only for display in the unlocked session).
+The database file is stored with `0600` permissions. URLs are stored in
+plaintext; **site names, usernames, passwords and notes are encrypted** (site
+names/usernames are decrypted only for display in the unlocked session).
 
 > Deleting `Hellopass.exe` does **not** delete your data. To fully wipe, remove
 > the `%APPDATA%\com.hellopass.app` folder.
